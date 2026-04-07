@@ -1,0 +1,196 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>La Veranda Hotel</title>
+  <link rel="stylesheet" href="./assets/css/homepage.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+</head>
+
+<body>
+  <div class="frame">
+    <header class="top-nav">
+      <nav class="nav-inner">
+        <div class="nav-links">
+          <a class="nav-link active" href="#">Home</a>
+          <a class="nav-link" href="./review_category.html?type=positive">Positive Review</a>
+          <a class="nav-link" href="./review_category.html?type=negative">Negative Review</a>
+          <a class="nav-link" href="./aboutus.html">About Us</a>
+        </div>
+    
+        <span class="nav-book-btn" aria-disabled="true">Book Now</span>
+      </nav>
+    </header>
+
+    <main class="home">
+      <section class="home-left">
+        <h1 class="home-title">La Veranda Hotel, Larnaca </h1>
+        <p class="home-quote">
+          Welcome to La Veranda de Larnaca, your exquisite haven for a perfect getaway! Nestled on a small hill just 5 minutes from Larnaca Airport, our charming hotel boasts 28 thoughtfully designed rooms that blend modern comfort with Mediterranean charm. Immerse yourself in the beauty of our surroundings, as we are conveniently situated within walking distance from the pristine sands of McKenzie Beach and just moments away from the vibrant heart of Larnaca city.<br><br>
+          At La Veranda de Larnaca, we pride ourselves on offering a serene escape with easy access to both leisure and business destinations. Whether you're seeking relaxation by the sea or exploring the cultural delights of Larnaca, our hotel provides the ideal starting point for your adventures.
+
+        </p>
+
+        <div class="hotel-meta">
+          <div class="hotel-rating">
+            <span class="hotel-rating__score">4.7</span>
+            <div class="hotel-rating__stars" aria-label="4.7 out of 5 stars">
+              <i class="fa-solid fa-star"></i>
+              <i class="fa-solid fa-star"></i>
+              <i class="fa-solid fa-star"></i>
+              <i class="fa-solid fa-star"></i>
+              <i class="fa-solid fa-star-half-stroke"></i>
+            </div>
+          </div>
+
+          <div class="hotel-meta__items">
+            <span class="hotel-meta__item">
+              <i class="fa-solid fa-location-dot"></i>
+              2.7 km from centre
+            </span>
+            <span class="hotel-meta__item">
+              <i class="fa-solid fa-umbrella-beach"></i>
+              Beach nearby
+            </span>
+          </div>
+        </div>
+
+        <div class="hotel-features">
+          <div class="hotel-feature">
+            <i class="fa-solid fa-wifi"></i>
+            <span>Free WiFi</span>
+          </div>
+
+          <div class="hotel-feature">
+            <i class="fa-solid fa-square-parking"></i>
+            <span>Free parking</span>
+          </div>
+
+          <div class="hotel-feature">
+            <i class="fa-solid fa-people-roof"></i>
+            <span>Family rooms</span>
+          </div>
+
+          <div class="hotel-feature">
+            <i class="fa-solid fa-utensils"></i>
+            <span>Restaurant</span>
+          </div>
+
+          <div class="hotel-feature">
+            <i class="fa-solid fa-ban-smoking"></i>
+            <span>Non-smoking rooms</span>
+          </div>
+
+          <div class="hotel-feature">
+            <i class="fa-solid fa-wheelchair"></i>
+            <span>Facilities for disabled guests</span>
+          </div>
+
+          <div class="hotel-feature">
+            <i class="fa-solid fa-umbrella-beach"></i>
+            <span>Terrace</span>
+          </div>
+
+          <div class="hotel-feature">
+            <i class="fa-solid fa-mug-hot"></i>
+            <span>Tea/coffee maker in all rooms</span>
+          </div>
+
+          <div class="hotel-feature">
+            <i class="fa-solid fa-martini-glass"></i>
+            <span>Bar</span>
+          </div>
+
+          <div class="hotel-feature">
+            <i class="fa-solid fa-mug-saucer"></i>
+            <span>Exceptional breakfast</span>
+          </div>
+        </div>
+
+        <section class="stats-card" aria-label="Hotel review statistics">
+          <div class="stats-card__header">
+            <span class="stats-card__eyebrow">Statistics</span>
+            <h2 class="stats-card__title">Review in hotel</h2>
+          </div>
+
+          <div class="stats-card__divider" role="presentation"></div>
+
+          <div class="stats-gauge" role="img" aria-label="Total reviews 1500, Positive 67 percent, Negative 33 percent">
+            <svg class="stats-gauge__svg" viewBox="0 0 240 240" aria-hidden="true">
+              <circle class="stats-gauge__track" cx="120" cy="120" r="78"></circle>
+          
+              <circle
+                class="stats-gauge__arc stats-gauge__arc--positive"
+                cx="120"
+                cy="120"
+                r="78"
+                style="stroke-dasharray: 328.4 161.7;"
+              ></circle>
+          
+              <circle
+                class="stats-gauge__arc stats-gauge__arc--negative"
+                cx="120"
+                cy="120"
+                r="78"
+                style="stroke-dasharray: 161.7 328.4;"
+              ></circle>
+            </svg>
+          
+            <div class="stats-gauge__center">
+              <div class="stats-gauge__label">Total review</div>
+              <div class="stats-gauge__value">1,500</div>
+            </div>
+          </div>
+
+          <div class="stats-legend">
+            <div class="stats-legend__item">
+              <span class="stats-legend__dot stats-legend__dot--positive"></span>
+              <span class="stats-legend__name">POSITIVE</span>
+              <span class="stats-legend__value">67%</span>
+            </div>
+
+            <div class="stats-legend__item">
+              <span class="stats-legend__dot stats-legend__dot--negative"></span>
+              <span class="stats-legend__name">NEGATIVE</span>
+              <span class="stats-legend__value">33%</span>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="home-right">
+        <div class="slider" id="hotelSlider">
+          <div class="slider-track">
+            <img class="slide active" src="./assets/images/hotel.jpg" alt="Hotel view 1" />
+            <img class="slide" src="./assets/images/hotel2.jpg" alt="Hotel view 2" />
+            <img class="slide" src="./assets/images/hotel3.jpg" alt="Hotel view 3" />
+            <img class="slide" src="./assets/images/hotel4.jpg" alt="Hotel view 4" />
+            <img class="slide" src="./assets/images/hotel5.jpg" alt="Hotel view 5" />
+            <img class="slide" src="./assets/images/hotel6.jpg" alt="Hotel view 6" />
+            <img class="slide" src="./assets/images/hotel7.avif" alt="Hotel view 7" />
+          </div>
+
+          <button class="slider-btn prev" aria-label="Previous image">&#10094;</button>
+          <button class="slider-btn next" aria-label="Next image">&#10095;</button>
+
+          <div class="slider-dots">
+            <span class="dot active" data-index="0"></span>
+            <span class="dot" data-index="1"></span>
+            <span class="dot" data-index="2"></span>
+            <span class="dot" data-index="3"></span>
+            <span class="dot" data-index="4"></span>
+            <span class="dot" data-index="5"></span>
+            <span class="dot" data-index="6"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./assets/js/homepage.js"></script>
+
+</body>
+
+</html>
