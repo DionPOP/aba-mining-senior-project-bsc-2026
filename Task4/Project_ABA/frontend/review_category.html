@@ -1,0 +1,128 @@
+﻿<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Review Categories</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+
+  <link rel="stylesheet" href="./assets/css/review_category.css">
+</head>
+
+<body>
+  <div class="frame">
+
+    <header class="top-nav">
+      <nav class="nav-inner">
+        <a class="nav-link" href="./homepage.html">Home</a>
+        <a class="nav-link" id="nav-positive" href="./review_category.html?type=positive">Positive Review</a>
+        <a class="nav-link" id="nav-negative" href="./review_category.html?type=negative">Negative Review</a>
+        <a class="nav-link" href="./aboutus.html">About Us</a>
+      </nav>
+    </header>
+
+    <main class="container">
+      <header class="head">
+        <h1>Review Categories</h1>
+        <p>Choose the aspect of the review that interests you</p>
+      </header>
+
+      <section class="grid-cards">
+        <button class="c-card" data-topic="Booking" type="button">
+          <div class="c-title"><i class="fa-solid fa-bed"></i> Booking</div>
+        </button>
+
+        <button class="c-card" data-topic="Check-in" type="button">
+          <div class="c-title"><i class="fa-solid fa-right-to-bracket"></i> Check-in</div>
+          <div class="ratio">
+            <span class="neg">-</span><span class="pos">-</span>
+          </div>
+        </button>
+
+        <button class="c-card" data-topic="Check-out" type="button">
+          <div class="c-title"><i class="fa-solid fa-right-from-bracket"></i> Check-out</div>
+          <div class="ratio">
+            <span class="neg">-</span><span class="pos">-</span>
+          </div>
+        </button>
+
+        <button class="c-card" data-topic="Facility" type="button">
+          <div class="c-title"><i class="fa-solid fa-building"></i> Facility</div>
+        </button>
+
+        <button class="c-card" data-topic="Food" type="button">
+          <div class="c-title"><i class="fa-solid fa-utensils"></i> Food</div>
+        </button>
+
+        <button class="c-card" data-topic="Staff" type="button">
+          <div class="c-title"><i class="fa-solid fa-user"></i> Staff</div>
+          <div class="ratio">
+            <span class="neg">-</span><span class="pos">-</span>
+          </div>
+        </button>
+
+        <button class="c-card" data-topic="Taxi-issue" type="button">
+          <div class="c-title"><i class="fa-solid fa-taxi"></i> Taxi-issue</div>
+        </button>
+
+        <button class="c-card" data-topic="Location" type="button">
+          <div class="c-title"><i class="fa-solid fa-location-dot"></i> Location</div>
+        </button>
+
+        <button class="c-card" data-topic="Price" type="button">
+          <div class="c-title"><i class="fa-solid fa-coins"></i> Price</div>
+          <div class="ratio">
+            <span class="neg">-</span><span class="pos">-</span>
+          </div>
+        </button>
+
+        <button class="c-card" data-topic="Room" type="button">
+          <div class="c-title"><i class="fa-solid fa-bed"></i> Room</div>
+        </button>
+      </section>
+
+      <section class="panel" id="panel">
+        <div class="panel-top">
+          <div>
+            <h2 id="review-title"></h2>
+          </div>
+
+          <label class="search">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input id="search-input" type="text" placeholder="Search" />
+          </label>
+
+          <label class="filter">
+            <i class="fa-solid fa-filter"></i>
+            <select id="sentiment-filter" aria-label="Filter sentiment">
+              <option value="positive">Positive</option>
+              <option value="negative">Negative</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="thead row">
+          <div>Supporting</div>
+          <div>Count</div>
+          <div>Contrary</div>
+          <div>Detail</div>
+        </div>
+
+        <div id="rows-container"></div>
+        <div class="foot" id="foot-text"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./assets/js/api.js"></script>
+  <script src="./assets/js/review_category.js"></script>
+</body>
+
+</html>
+
