@@ -4,32 +4,30 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Review Categories</title>
+  <title>Review Analysis</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
-
   <link rel="stylesheet" href="./assets/css/review_category.css">
 </head>
 
-<body>
+<body class="hide-contrary">
   <div class="frame">
 
     <header class="top-nav">
       <nav class="nav-inner">
         <a class="nav-link" href="./homepage.html">Home</a>
-        <a class="nav-link" id="nav-positive" href="./review_category.html?type=positive">Positive Review</a>
-        <a class="nav-link" id="nav-negative" href="./review_category.html?type=negative">Negative Review</a>
+        <a class="nav-link active" href="./review_category.html">Review</a>
         <a class="nav-link" href="./aboutus.html">About Us</a>
       </nav>
     </header>
 
     <main class="container">
       <header class="head">
-        <h1>Review Categories</h1>
+        <h1>Review Analysis</h1>
         <p>Choose the aspect of the review that interests you</p>
       </header>
 
@@ -95,27 +93,41 @@
 
           <label class="search">
             <i class="fa-solid fa-magnifying-glass"></i>
-            <input id="search-input" type="text" placeholder="Search" />
-          </label>
-
-          <label class="filter">
-            <i class="fa-solid fa-filter"></i>
-            <select id="sentiment-filter" aria-label="Filter sentiment">
-              <option value="positive">Positive</option>
-              <option value="negative">Negative</option>
-            </select>
+            <input id="search-input" type="text" placeholder="Search supporting text" />
           </label>
         </div>
 
-        <div class="thead row">
-          <div>Supporting</div>
-          <div>Count</div>
-          <div>Contrary</div>
-          <div>Detail</div>
-        </div>
+        <div class="dual-panel">
+          <section class="sentiment-panel positive-panel">
+            <div class="sentiment-head">
+              <h3>Positive Review</h3>
+            </div>
 
-        <div id="rows-container"></div>
-        <div class="foot" id="foot-text"></div>
+            <div class="thead row row-4">
+              <div>Supporting</div>
+              <div>Count</div>
+              <div>Contrary</div>
+              <div>Detail</div>
+            </div>
+
+            <div id="positive-rows-container"></div>
+          </section>
+
+          <section class="sentiment-panel negative-panel">
+            <div class="sentiment-head">
+              <h3>Negative Review</h3>
+            </div>
+
+            <div class="thead row row-4">
+              <div>Supporting</div>
+              <div>Count</div>
+              <div>Contrary</div>
+              <div>Detail</div>
+            </div>
+
+            <div id="negative-rows-container"></div>
+          </section>
+        </div>
       </section>
     </main>
   </div>
@@ -125,4 +137,3 @@
 </body>
 
 </html>
-

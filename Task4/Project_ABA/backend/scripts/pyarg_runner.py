@@ -99,6 +99,16 @@ def get_accepted_assumptions(extensions, strategy_specification: str):
     raise ValueError("strategy_specification must be 'Skeptical' or 'Credulous'")
 
 
+def normalize_extension_to_assumptions(ext, assumptions: Set[str]) -> List[str]:
+    """Return only real assumptions from one extension, sorted for output."""
+    return sorted(str(x) for x in ext if str(x) in assumptions)
+
+
+def normalize_accepted_to_assumptions(items, assumptions: Set[str]) -> List[str]:
+    """Return only real assumptions from accepted items, sorted for output."""
+    return sorted(str(x) for x in items if str(x) in assumptions)
+
+
 def forward_closure(base: Set[str], rules: Iterable[Dict[str, object]]) -> Set[str]:
     """Derive atoms reachable from an assumption extension via forward chaining."""
     derived = set(base)
@@ -173,34 +183,44 @@ def main() -> int:
             payload.get("strategy_specification", "Credulous")
         ).strip() or "Credulous"
         exts = get_abaf_extensions(framework, semantics_specification)
-        accepted_assumptions = sorted(
-            [str(x) for x in get_accepted_assumptions(exts, strategy_specification)]
+        accepted_raw = get_accepted_assumptions(exts, strategy_specification)
+        accepted_assumptions = normalize_accepted_to_assumptions(
+            accepted_raw, assumptions
         )
 
-        query = payload.get("query")
+        query_value = str(payload.get("query", "") or "").strip()
+        include_debug_fields = bool(payload.get("include_debug_fields", False))
+        raw_exts: List[List[str]] = []
         normalized_exts: List[List[str]] = []
         derived_per_ext: List[List[str]] = []
         query_in_ext = []
         for ext in exts:
             ext_set = set(ext)
-            derived = forward_closure(ext_set, rule_defs)
-            normalized_exts.append(sorted(ext_set))
-            derived_per_ext.append(sorted(derived))
-            if query:
-                query_in_ext.append(bool(str(query) in derived))
+            normalized_exts.append(
+                normalize_extension_to_assumptions(ext_set, assumptions)
+            )
+            if include_debug_fields:
+                derived = forward_closure(ext_set, rule_defs)
+                raw_exts.append(sorted(str(x) for x in ext_set))
+                derived_per_ext.append(sorted(derived))
+            if query_value:
+                # Query acceptance should remain available even when debug fields are disabled.
+                derived = forward_closure(ext_set, rule_defs)
+                query_in_ext.append(query_value in derived)
 
         response = {
             "semantics_specification": semantics_specification,
             "strategy_specification": strategy_specification,
             "extensions": normalized_exts,
-            "derived": derived_per_ext,
             "accepted_assumptions": accepted_assumptions,
             "count": len(normalized_exts),
+            "query": query_value or None,
+            "credulous": any(query_in_ext) if query_value else None,
+            "skeptical": (all(query_in_ext) if normalized_exts else False) if query_value else None,
         }
-        if query:
-            response["query"] = str(query)
-            response["credulous"] = any(query_in_ext)
-            response["skeptical"] = all(query_in_ext) if normalized_exts else False
+        if include_debug_fields:
+            response["raw_extensions"] = raw_exts
+            response["derived"] = derived_per_ext
 
         print(json.dumps(response, ensure_ascii=False))
         return 0

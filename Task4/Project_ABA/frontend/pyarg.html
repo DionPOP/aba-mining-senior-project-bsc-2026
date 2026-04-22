@@ -5,345 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ABA Graph</title>
   <link rel="stylesheet" href="./assets/css/pyarg.css" />
-  <style>
-    html {
-      scroll-behavior: smooth;
-    }
-
-    .mini-guide-card {
-      margin: 0 0 1rem;
-      background: #f8f4ed;
-      border: 1px solid #ddd4c8;
-      border-radius: 12px;
-      padding: 0.72rem 0.82rem;
-      box-shadow: 0 5px 14px rgba(68, 54, 35, 0.04);
-    }
-
-    .mini-guide-card h3 {
-      margin: 0 0 0.32rem;
-      color: #31271f;
-      font-size: 0.95rem;
-      line-height: 1.35;
-    }
-
-    .legend-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-      gap: 0.55rem;
-    }
-
-    .legend-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.45rem;
-      padding: 0.5rem 0.62rem;
-      border: 1px solid #d8cebf;
-      border-radius: 12px;
-      background: #fbf8f2;
-      color: #4f4335;
-      font-size: 0.76rem;
-      line-height: 1.35;
-      min-width: 0;
-    }
-
-    .legend-item > span:last-child {
-      overflow-wrap: anywhere;
-    }
-
-    .legend-dot,
-    .legend-line {
-      flex: 0 0 auto;
-      display: inline-block;
-    }
-
-    .legend-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(0, 0, 0, 0.12);
-    }
-
-    .legend-main {
-      background: #d1d5db;
-    }
-
-    .legend-support {
-      background: #86efac;
-    }
-
-    .legend-opposite {
-      background: #fecaca;
-    }
-
-    .legend-line {
-      width: 14px;
-      height: 2px;
-      background: #111827;
-      border-radius: 2px;
-    }
-
-    .legend-line-attack {
-      width: 14px;
-      height: 2px;
-      background: #dc2626;
-      border-radius: 2px;
-    }
-
-    .legend-badge {
-      min-width: 18px;
-      height: 18px;
-      padding: 0 5px;
-      border-radius: 999px;
-      background: #111827;
-      color: #f8fafc;
-      font-size: 0.66rem;
-      font-weight: 700;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-    }
-
-    .legend-dash {
-      width: 16px;
-      height: 10px;
-      border-radius: 999px;
-      border: 2px dashed #6b7280;
-      background: transparent;
-    }
-
-    .legend-solid {
-      width: 16px;
-      height: 10px;
-      border-radius: 999px;
-      border: 2px solid #6b7280;
-      background: transparent;
-    }
-
-    .step-guide details {
-      border: 1px solid #d8cebf;
-      border-radius: 12px;
-      background: #fbf8f2;
-      padding: 0.56rem 0.62rem;
-    }
-
-    .step-guide summary {
-      cursor: pointer;
-      font-size: 0.8rem;
-      font-weight: 700;
-      color: #4f4335;
-      list-style: none;
-    }
-
-    .step-guide summary::-webkit-details-marker {
-      display: none;
-    }
-
-    .step-guide summary::before {
-      content: "▸";
-      margin-right: 0.42rem;
-      color: #6b5e4e;
-    }
-
-    .step-guide details[open] summary::before {
-      content: "▾";
-    }
-
-    .step-guide .step-intro {
-      margin: 0.42rem 0 0;
-      color: #6a5d4d;
-      font-size: 0.74rem;
-      line-height: 1.4;
-    }
-
-    .step-guide ol {
-      margin: 0.52rem 0 0;
-      padding-left: 1.2rem;
-      color: #4f4335;
-      font-size: 0.78rem;
-      line-height: 1.5;
-    }
-
-    .step-guide li + li {
-      margin-top: 0.34rem;
-    }
-
-    .step-guide strong {
-      color: #31271f;
-    }
-
-    .workspace-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: 1rem;
-      align-items: start;
-    }
-
-    .graph-workspace-panel {
-      min-width: 0;
-    }
-
-    .graph-panel.workspace-canvas {
-      min-height: 620px;
-      max-height: 720px;
-      overflow: auto;
-      padding: 0;
-      background: #f7f2ea;
-      border-radius: 14px;
-      border: 1px solid #d9cfc2;
-    }
-
-    #main-graph-canvas {
-      display: block;
-      min-width: 1280px;
-      min-height: 680px;
-      width: 100%;
-      height: 680px;
-    }
-
-    .sidebar-stack {
-      display: grid;
-      gap: 0.75rem;
-      min-width: 0;
-    }
-
-    .under-graph-cards {
-      margin-top: 1rem;
-      display: grid;
-      gap: 0.75rem;
-      grid-template-columns: 1fr;
-    }
-
-    .sidebar-card {
-      background: #f4eee4;
-      border: 1px solid #d8cdbf;
-      border-radius: 14px;
-      padding: 0.8rem;
-      box-shadow: 0 6px 16px rgba(68, 54, 35, 0.05);
-    }
-
-    .sidebar-card h3 {
-      margin: 0 0 0.58rem;
-      font-size: 0.86rem;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: #6b5e4e;
-    }
-
-    .sidebar-card .filter-row {
-      margin: 0 0 0.55rem;
-    }
-
-    .sidebar-card .filter-row:last-child {
-      margin-bottom: 0;
-    }
-
-    .sidebar-card .filter-row label {
-      font-size: 0.78rem;
-      color: #675949;
-      font-weight: 700;
-      margin-bottom: 0.2rem;
-      display: inline-block;
-    }
-
-    .sidebar-card .filter-row select {
-      width: 100%;
-    }
-
-    .sidebar-hint {
-      font-size: 0.76rem;
-      color: #7a6c5b;
-      margin: 0 0 0.45rem;
-      line-height: 1.4;
-    }
-
-    #extension-list,
-    #accepted-assumptions {
-      max-height: 170px;
-      overflow: auto;
-      padding-right: 0.18rem;
-    }
-
-    #extension-natural-language {
-      line-height: 1.48;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 220px;
-      overflow: auto;
-    }
-
-    #graph-summary-text {
-      line-height: 1.5;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 260px;
-      overflow: auto;
-    }
-
-    #extension-natural-meta {
-      display: block;
-      margin-top: 0.35rem;
-    }
-
-    #graph-summary-meta {
-      display: block;
-      margin-top: 0.35rem;
-    }
-
-    @media (min-width: 1080px) {
-      .workspace-grid {
-        grid-template-columns: minmax(0, 70%) minmax(320px, 30%);
-      }
-
-      .sidebar-stack {
-        position: sticky;
-        top: 14px;
-      }
-
-      .under-graph-cards {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-    }
-
-    @media (max-width: 980px) {
-      .legend-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .graph-panel.workspace-canvas {
-        min-height: 560px;
-        max-height: 640px;
-      }
-
-      #main-graph-canvas {
-        min-height: 620px;
-        height: 620px;
-      }
-    }
-
-    @media (max-width: 640px) {
-      .legend-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .graph-panel.workspace-canvas {
-        min-height: 500px;
-        max-height: 560px;
-      }
-
-      #main-graph-canvas {
-        min-height: 560px;
-        height: 560px;
-      }
-    }
-  </style>
 </head>
 <body>
   <header class="top-nav">
     <nav class="nav-inner">
       <a class="nav-link" href="./homepage.html">Home</a>
-      <a class="nav-link" id="nav-positive" href="./review_category.html?type=positive">Positive Review</a>
-      <a class="nav-link" id="nav-negative" href="./review_category.html?type=negative">Negative Review</a>
+      <a class="nav-link active" href="./review_category.html">Review</a>
       <a class="nav-link" href="./aboutus.html">About Us</a>
     </nav>
   </header>
@@ -374,6 +41,12 @@
         <section class="graph-card graph-workspace-panel">
           <div class="card-head graph-head">
             <h2 id="semantics-title">Main Graph (Preferred)</h2>
+            <div class="graph-view-controls">
+              <button id="graph-zoom-out-btn" type="button" title="Zoom out graph">−</button>
+              <button id="graph-zoom-in-btn" type="button" title="Zoom in graph">+</button>
+              <button id="graph-fit-btn" type="button" title="Fit graph to viewport">Fit</button>
+              <button id="graph-fullscreen-btn" type="button" title="Toggle full screen">Full screen</button>
+            </div>
           </div>
           <section class="graph-panel workspace-canvas">
             <svg id="main-graph-canvas" viewBox="0 0 1280 540" role="img" aria-label="Main preferred graph"></svg>
@@ -381,20 +54,15 @@
         </section>
 
         <aside class="sidebar-stack" aria-label="Graph controls and insights">
-          <article class="mini-guide-card step-guide">
-            <details open>
-              <summary>Step by step: how to read this graph</summary>
-              <ol>
-                <li><strong>Top node:</strong> Read the gray main claim first (`good_claim` or `bad_claim`). This is the final conclusion being tested.</li>
-                <li><strong>Middle layer:</strong> Read incoming reasons around the claim. Green supports it, red challenges it. Dashed border means assumption (no direct evidence yet).</li>
-                <li><strong>Bottom layer:</strong> These are real phrases from customer reviews. They provide the evidence that feeds into higher-level reasons.</li>
-                <li><strong>Arrows and colors:</strong> Follow arrow direction to see influence flow. Black line = connection/support, red line = attack/counterargument.</li>
-                <li><strong>Badge number:</strong> The number on a node is evidence count. Higher number = mentioned by more reviews.</li>
-              </ol>
-            </details>
-          </article>
+          <section class="sidebar-card llm-summary-card">
+            <h3>LLM SUMMARY</h3>
+            <p class="sidebar-hint">Simple explanation of this graph for users</p>
+            <div id="graph-summary-text" class="natural-language-box">-</div>
+            <small id="graph-summary-meta" class="natural-language-meta"></small>
+            <p class="summary-note">Confirm LLM after Confirm Explanation to translate extensions.</p>
+          </section>
 
-          <article class="mini-guide-card">
+          <article class="mini-guide-card" id="node-types-card">
             <h3>Node types</h3>
             <div class="legend-grid">
               <div class="legend-item"><span class="legend-dot legend-main"></span><span>Main Opinion</span></div>
@@ -408,12 +76,6 @@
             </div>
           </article>
 
-          <section class="sidebar-card">
-            <h3>LLM Summary</h3>
-            <p class="sidebar-hint">Simple explanation of this graph for users</p>
-            <div id="graph-summary-text" class="natural-language-box">-</div>
-            <small id="graph-summary-meta" class="natural-language-meta"></small>
-          </section>
         </aside>
       </section>
 
@@ -422,15 +84,15 @@
           <h3>Graph Controls</h3>
           <div class="filter-row">
             <label for="layer-mode-select">Graph Layer</label>
-            <select id="layer-mode-select">
-              <option value="layer1">Layer 1 </option>
-              <option value="layer2" selected>Layer 2 </option>
+            <select id="layer-mode-select" title="Choose graph layer detail">
+              <option value="layer1">Layer 1</option>
+              <option value="layer2" selected>Layer 2: Full graph</option>
             </select>
           </div>
 
           <div class="filter-row">
             <label for="semantics-select">Semantics</label>
-            <select id="semantics-select">
+            <select id="semantics-select" title="Choose semantics used to compute extensions">
               <option value="Stable">Stable</option>
               <option value="Preferred" selected>Preferred</option>
               <option value="Conflict-Free">Conflict-Free</option>
@@ -444,52 +106,72 @@
 
           <div class="filter-row">
             <label for="strategy-select">Evaluation Strategy</label>
-            <select id="strategy-select">
+            <select id="strategy-select" title="Credulous = at least one extension, Skeptical = all extensions">
               <option value="Credulous" selected>Credulous</option>
               <option value="Skeptical">Skeptical</option>
+            </select>
+          </div>
+
+          <div class="filter-row">
+            <label for="llm-model-select-main">Translate with LLM</label>
+            <select id="llm-model-select-main" data-llm-model-select title="Choose model for explanations">
+              <option value="gemma3:4b" selected>gemma3:4b</option>
+              <option value="deepseek-r1:7b">deepseek-r1:7b</option>
+              <option value="qwen2.5:7b">qwen2.5:7b</option>
             </select>
           </div>
         </section>
 
         <section class="sidebar-card">
-          <h3>Current Explanation</h3>
-          <p class="sidebar-hint">The extension(s)</p>
+          <h3>Extension Sets</h3>
+          <p class="sidebar-hint">Semantic extension members. These are assumption sets, not final accepted claims.</p>
           <div id="extension-list" class="token-wrap"></div>
-          <p class="sidebar-hint" style="margin-top:0.6rem;">Translate to natural language</p>
+          <p class="sidebar-hint" style="margin-top:0.6rem;">Formal semantics explanation</p>
           <div id="extension-natural-language" class="natural-language-box">-</div>
           <small id="extension-natural-meta" class="natural-language-meta"></small>
         </section>
 
-        <section class="sidebar-card">
-          <h3>Model Settings</h3>
-          <div class="filter-row">
-            <label for="llm-model-select">LLM Model</label>
-            <select id="llm-model-select">
-              <option value="gpt-4o">gpt-4o</option>
-              <option value="gemini-2.5-pro">gemini-2.5-pro</option>
-              <option value="qwen2.5" selected>qwen2.5</option>
-              <option value="gemma3:4b">gemma3:4b</option>
-            </select>
+        <section class="sidebar-card semantics-guide-card">
+          <h3>Semantics Guide</h3>
+          <div class="semantics-guide-scroll">
+            <p>The core of argumentation theory is to determine which sets of arguments, called extensions, can be considered "collectively acceptable". These extensions are built upon the foundational concepts of conflict-freeness and admissibility.</p>
+            <p><strong>Conflict-Free Set:</strong> A set of arguments is conflict-free if no argument in the set attacks another argument within the same set.</p>
+            <p><strong>Admissible Set:</strong> A conflict-free set is admissible if it can defend all of its members against any external attacks by using other members within the set.</p>
+            <p>Based on these principles, primary semantics are introduced as follows:</p>
+            <ul>
+              <li><strong>Complete Extension:</strong> An admissible set that contains every argument that it defends.</li>
+              <li><strong>Grounded Extension:</strong> The smallest and unique complete extension, computed based on un-attacked arguments. It represents the most skeptical and undeniable viewpoint.</li>
+              <li><strong>Preferred Extension:</strong> A maximal (largest) admissible set that represents a maximally coherent viewpoint.</li>
+              <li><strong>Stable Extension:</strong> A conflict-free set that attacks every argument not contained within the set, representing a fully opinionated viewpoint.</li>
+              <li><strong>Evaluation Strategy:</strong> Credulous accepts arguments in at least one extension. Skeptical accepts arguments only if they appear in all extensions.</li>
+            </ul>
           </div>
         </section>
 
         <section class="sidebar-card">
           <h3>Accepted Assumptions</h3>
+          <p class="sidebar-hint">Credulous uses the union of extension sets; skeptical uses the intersection. The selected claim is accepted only if it is derived from these assumptions through the ABA rules.</p>
           <div id="accepted-assumptions" class="token-wrap"></div>
+        </section>
+
+        <section class="sidebar-card" hidden>
+          <h3>ABA Payload JSON</h3>
+          <p class="sidebar-hint">Exact payload currently sent to PyArg for the selected graph layer and semantics. Atoms prefixed with <code>__ctr__</code> are synthetic helper contraries added for ABA evaluation.</p>
+          <pre id="payload-json-output" class="payload-json-box">Loading payload...</pre>
         </section>
 
       </section>
     </section>
 
-    <section class="semantics-wrap" hidden style="display:none !important;">
-      <details class="semantics-panel tech-panel" open hidden style="display:none !important;">
-        <summary>Semantics Output</summary>
+    <section class="semantics-wrap" hidden>
+      <details class="semantics-panel tech-panel" open>
+        <summary>Semantics Debug</summary>
         <p id="preferred-meta">Loading semantics...</p>
         <pre id="preferred-output"></pre>
       </details>
 
-      <details class="json-panel tech-panel" hidden style="display:none !important;">
-        <summary>Raw JSON</summary>
+      <details class="json-panel tech-panel">
+        <summary>Graph JSON</summary>
         <pre id="json-output"></pre>
       </details>
     </section>
@@ -498,7 +180,6 @@
 
   <script src="./assets/js/api.js"></script>
   <script src="./assets/js/graph.js"></script>
-  <script src="./assets/js/semantics.js"></script>
   <script src="./assets/js/pyarg-page.js"></script>
 </body>
 </html>

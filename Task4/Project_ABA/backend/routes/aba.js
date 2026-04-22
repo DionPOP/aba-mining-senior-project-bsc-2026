@@ -20,7 +20,7 @@ function createAbaRouter({ abaGraphService }) {
     router.post("/api/pyarg/evaluate", async (req, res) => {
         try {
             const body = req.body || {};
-            const result = await abaGraphService.runPreferred(body);
+            const result = await abaGraphService.evaluatePyArg(body);
             if (result && result.error) {
                 return res.status(400).json(result);
             }
@@ -34,16 +34,84 @@ function createAbaRouter({ abaGraphService }) {
         }
     });
 
+    router.post("/api/pyarg/evaluate/jobs", async (req, res) => {
+        try {
+            const body = req.body || {};
+            const job = await abaGraphService.createPyArgEvaluationJob(body);
+            return res.status(202).json(job);
+        } catch (err) {
+            console.error("[/api/pyarg/evaluate/jobs] error:", err);
+            return res.status(500).json({
+                error: String(err.message || err),
+                hint: "Ensure Python and py_arg are installed, or set PYTHON_EXECUTABLE.",
+            });
+        }
+    });
+
+    router.get("/api/pyarg/evaluate/jobs/:jobId", async (req, res) => {
+        try {
+            res.set("Cache-Control", "no-store, max-age=0");
+            res.set("Pragma", "no-cache");
+            const jobId = String(req.params?.jobId || "").trim();
+            const job = await abaGraphService.getPyArgEvaluationJob(jobId);
+            if (!job) {
+                return res.status(404).json({
+                    error: "PyArg job not found or expired",
+                });
+            }
+            return res.json(job);
+        } catch (err) {
+            console.error("[/api/pyarg/evaluate/jobs/:jobId] error:", err);
+            return res.status(500).json({
+                error: String(err.message || err),
+            });
+        }
+    });
+
     router.post("/api/llm/translate-extension", async (req, res) => {
         try {
             const body = req.body || {};
-            const result = await abaGraphService.translateExtensionsToNaturalLanguage(body);
+            const result = await abaGraphService.generateLlmExplanation(body);
             return res.json(result);
         } catch (err) {
             console.error("[/api/llm/translate-extension] error:", err);
             return res.status(500).json({
                 error: String(err.message || err),
-                hint: "Configure OPENAI_API_KEY or GEMINI_API_KEY in backend env.",
+                hint: "Ensure Ollama is running and set OLLAMA_BASE_URL if needed.",
+            });
+        }
+    });
+
+    router.post("/api/llm/translate-extension/jobs", async (req, res) => {
+        try {
+            const body = req.body || {};
+            const job = await abaGraphService.createLlmExplanationJob(body);
+            return res.status(202).json(job);
+        } catch (err) {
+            console.error("[/api/llm/translate-extension/jobs] error:", err);
+            return res.status(500).json({
+                error: String(err.message || err),
+                hint: "Ensure Ollama is running and set OLLAMA_BASE_URL if needed.",
+            });
+        }
+    });
+
+    router.get("/api/llm/translate-extension/jobs/:jobId", async (req, res) => {
+        try {
+            res.set("Cache-Control", "no-store, max-age=0");
+            res.set("Pragma", "no-cache");
+            const jobId = String(req.params?.jobId || "").trim();
+            const job = await abaGraphService.getLlmExplanationJob(jobId);
+            if (!job) {
+                return res.status(404).json({
+                    error: "LLM job not found or expired",
+                });
+            }
+            return res.json(job);
+        } catch (err) {
+            console.error("[/api/llm/translate-extension/jobs/:jobId] error:", err);
+            return res.status(500).json({
+                error: String(err.message || err),
             });
         }
     });

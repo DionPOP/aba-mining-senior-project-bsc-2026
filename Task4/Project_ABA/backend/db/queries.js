@@ -107,7 +107,10 @@ function createQueryLayer({ pool, dbName }) {
         return rows || [];
     }
 
-    async function fetchAssumptionsAttackingPropositions(topicTable, contraryTable, claim, propositionList, limit) {
+    async function fetchAssumptionsAttackingPropositions(topicTable, contraryTable, claim, propositionList, limit = null) {
+        const params = [claim, propositionList];
+        const limitSql = limit != null ? "LIMIT ?" : "";
+        if (limit != null) params.push(limit);
         const [rows] = await pool.query(
             `SELECT a.assumption, MAX(a.cnt) AS cnt
              FROM \`${topicTable}\` a
@@ -116,8 +119,8 @@ function createQueryLayer({ pool, dbName }) {
                AND c.proposition IN (?)
              GROUP BY a.assumption
              ORDER BY cnt DESC, a.assumption ASC
-             LIMIT ?`,
-            [claim, propositionList, limit]
+             ${limitSql}`,
+            params
         );
         return rows || [];
     }

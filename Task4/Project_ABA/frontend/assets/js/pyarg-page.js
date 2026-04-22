@@ -1,10 +1,10 @@
 ﻿(function () {
-  const preferredSvg = document.getElementById("main-graph-canvas");
-  const svg = preferredSvg;
+  const svg = document.getElementById("main-graph-canvas");
   const metaEl = document.getElementById("graph-meta");
   const jsonOutputEl = document.getElementById("json-output");
   const preferredMetaEl = document.getElementById("preferred-meta");
   const preferredOutputEl = document.getElementById("preferred-output");
+  const payloadJsonOutputEl = document.getElementById("payload-json-output");
   
   const backLink = document.getElementById("back-link");
   const toggleAllBtn = document.getElementById("toggle-all-btn");
@@ -18,13 +18,27 @@
   const layerModeSelectEl = document.getElementById("layer-mode-select");
   const semanticsSelectEl = document.getElementById("semantics-select");
   const strategySelectEl = document.getElementById("strategy-select");
-  const llmModelSelectEl = document.getElementById("llm-model-select");
+  const llmModelSelectEls = Array.from(document.querySelectorAll("[data-llm-model-select]"));
   const extensionListEl = document.getElementById("extension-list");
   const extensionNaturalLanguageEl = document.getElementById("extension-natural-language");
   const extensionNaturalMetaEl = document.getElementById("extension-natural-meta");
   const acceptedAssumptionsEl = document.getElementById("accepted-assumptions");
+  const acceptedNaturalLanguageEl = document.getElementById("accepted-natural-language");
+  const acceptedNaturalMetaEl = document.getElementById("accepted-natural-meta");
   const graphSummaryTextEl = document.getElementById("graph-summary-text");
   const graphSummaryMetaEl = document.getElementById("graph-summary-meta");
+  const graphZoomOutBtnEl = document.getElementById("graph-zoom-out-btn");
+  const graphZoomInBtnEl = document.getElementById("graph-zoom-in-btn");
+  const graphFitBtnEl = document.getElementById("graph-fit-btn");
+  const graphFullscreenBtnEl = document.getElementById("graph-fullscreen-btn");
+  const graphWorkspacePanelEl = document.querySelector(".graph-workspace-panel");
+  const sidebarStackEl = document.querySelector(".sidebar-stack");
+  const graphSummaryCardEl = sidebarStackEl ? sidebarStackEl.querySelector(".sidebar-card") : null;
+  const graphDefinitionCardEl = sidebarStackEl ? sidebarStackEl.querySelector(".mini-guide-card.step-guide") : null;
+  const graphDefinitionListEl = graphDefinitionCardEl
+    ? graphDefinitionCardEl.querySelector(".graph-definition-list")
+    : null;
+  const nodeTypesCardEl = document.getElementById("node-types-card");
 
   const SUPPORTED_SEMANTICS = [
     "Stable",
@@ -38,88 +52,144 @@
   ];
   const SUPPORTED_STRATEGIES = ["Credulous", "Skeptical"];
   const SUPPORTED_LAYER_MODES = ["layer1", "layer2"];
+  const SUPPORTED_LLM_MODELS = ["gemma3:4b", "deepseek-r1:7b", "qwen2.5:7b"];
 
   const params = new URLSearchParams(window.location.search);
   const topic = String(params.get("topic") || "").trim();
   const sentiment = String(params.get("sentiment") || "all").trim();
   const supporting = String(params.get("supporting") || "").trim();
+  const selectedTopicLabel = String(params.get("selected_topic") || topic || "").trim();
   const attackMode = String(params.get("attack_mode") || "all").trim().toLowerCase();
   const attackDepth = String(params.get("attack_depth") || "1").trim();
   const focusOnly = String(params.get("focus_only") || "1").trim().toLowerCase();
+  let selectedLayerMode = String(params.get("layer_mode") || "layer2").trim().toLowerCase();
+  if (!SUPPORTED_LAYER_MODES.includes(selectedLayerMode)) selectedLayerMode = "layer2";
   let showAllContrary = String(params.get("show_all_contrary") || "1").trim().toLowerCase();
   let selectedSemantics = String(params.get("semantics") || "Preferred").trim();
   if (!SUPPORTED_SEMANTICS.includes(selectedSemantics)) selectedSemantics = "Preferred";
   let selectedStrategy = String(params.get("strategy") || "Credulous").trim();
   if (!SUPPORTED_STRATEGIES.includes(selectedStrategy)) selectedStrategy = "Credulous";
-  let selectedLayerMode = String(params.get("layer_mode") || "layer2").trim().toLowerCase();
-  if (!SUPPORTED_LAYER_MODES.includes(selectedLayerMode)) selectedLayerMode = "layer2";
-  let selectedLlmModel = String(params.get("llm_model") || "qwen2.5").trim();
-  if (!["gpt-4o", "gemini-2.5-pro", "qwen2.5", "gemma3:4b"].includes(selectedLlmModel)) selectedLlmModel = "qwen2.5";
+  let selectedLlmModel = String(params.get("llm_model") || "gemma3:4b").trim();
+  if (!SUPPORTED_LLM_MODELS.includes(selectedLlmModel)) selectedLlmModel = "gemma3:4b";
   let lastLoadedGraph = null;
   let lastSemanticsResult = null;
-  const apiBases = (() => {
-    const fromQuery = String(params.get("api_base") || "").trim();
-    if (fromQuery) return [fromQuery.replace(/\/+$/, "")];
-    if (window.location.protocol === "file:") return ["http://localhost:3000"];
-    if (window.location.port === "3000") return [""];
-    const sameOrigin = "";
-    const port3000 = `${window.location.protocol}//${window.location.hostname}:3000`;
-    return [sameOrigin, port3000];
-  })();
+  let lastSemanticsPayload = null;
+  let preferredRequestSeq = 0;
+  let llmRequestSeq = 0;
+  let graphSummarySeq = 0;
+  const semanticsResultCache = new Map();
+  const graphSummaryPending = new Map();
+  const llmJobPendingByKey = new Map();
+  const pyargJobPendingByKey = new Map();
+  const API_TIMEOUT_MS = 12000;
+  const PYARG_TIMEOUT_MS = 0;
+  const PYARG_JOB_POLL_INTERVAL_MS = 3000;
+  const PYARG_JOB_POLL_TIMEOUT_MS = 1800000;
+  const LLM_JOB_POLL_INTERVAL_MS = 1200;
+  const LLM_JOB_POLL_TIMEOUT_MS = 120000;
+  const JOB_NOT_FOUND_RECREATE_MAX = 0;
+  const apiClient = window.createApiClient({
+    params,
+    defaultTimeoutMs: API_TIMEOUT_MS,
+    timeoutResolver: (path) =>
+      String(path || "").startsWith("/api/pyarg/evaluate?")
+        || String(path || "").trim() === "/api/pyarg/evaluate"
+        ? PYARG_TIMEOUT_MS
+        : API_TIMEOUT_MS,
+  });
+  const { apiFetch } = apiClient;
+  let layoutSyncRaf = 0;
 
-  async function apiFetch(path, options) {
-    let lastError = null;
-    for (const base of apiBases) {
-      const url = `${base}${path}`;
-      try {
-        const resp = await fetch(url, options);
-        if (resp.status === 404 && base !== apiBases[apiBases.length - 1]) {
-          continue;
-        }
-        return resp;
-      } catch (err) {
-        lastError = err;
-      }
+  function syncWorkspaceSidebarHeight() {
+    if (!graphWorkspacePanelEl || !sidebarStackEl) return;
+    if (window.innerWidth < 1080) {
+      sidebarStackEl.style.height = "";
+      sidebarStackEl.style.maxHeight = "";
+      if (graphDefinitionListEl) graphDefinitionListEl.style.maxHeight = "";
+      return;
     }
-    throw lastError || new Error("API request failed");
+
+    const targetHeight = Math.max(0, Math.floor(graphWorkspacePanelEl.getBoundingClientRect().height));
+    if (!targetHeight) return;
+
+    if (!graphDefinitionCardEl || !graphDefinitionListEl) {
+      sidebarStackEl.style.height = "";
+      sidebarStackEl.style.maxHeight = "";
+      return;
+    }
+
+    sidebarStackEl.style.height = `${targetHeight}px`;
+    sidebarStackEl.style.maxHeight = `${targetHeight}px`;
+
+    if (!graphDefinitionListEl || !graphDefinitionCardEl || !graphSummaryCardEl || !nodeTypesCardEl) return;
+
+    const gap = parseFloat(window.getComputedStyle(sidebarStackEl).rowGap || "0") || 0;
+    const summaryHeight = Math.ceil(graphSummaryCardEl.getBoundingClientRect().height);
+    const nodeTypesHeight = Math.ceil(nodeTypesCardEl.getBoundingClientRect().height);
+    const defCardHeight = Math.ceil(graphDefinitionCardEl.getBoundingClientRect().height);
+    const defListHeight = Math.ceil(graphDefinitionListEl.getBoundingClientRect().height);
+    const defCardChrome = Math.max(0, defCardHeight - defListHeight);
+    const availableListHeight = Math.floor(
+      targetHeight - summaryHeight - nodeTypesHeight - (gap * 2) - defCardChrome
+    );
+    const minListHeight = 140;
+    graphDefinitionListEl.style.maxHeight = `${Math.max(minListHeight, availableListHeight)}px`;
+  }
+
+  function scheduleWorkspaceLayoutSync() {
+    if (layoutSyncRaf) cancelAnimationFrame(layoutSyncRaf);
+    layoutSyncRaf = window.requestAnimationFrame(() => {
+      layoutSyncRaf = 0;
+      syncWorkspaceSidebarHeight();
+    });
+  }
+
+  function renderMainGraphMessage(title, detail, tone = "error") {
+    if (!svg) return;
+    const width = 1280;
+    const height = 540;
+    const titleColor = tone === "error" ? "#7f1d1d" : "#1f2937";
+    const detailColor = tone === "error" ? "#4b5563" : "#374151";
+    svg.innerHTML = "";
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.setAttribute("width", String(width));
+    svg.setAttribute("height", String(height));
+    const g = createSvgEl("g", {});
+    const titleEl = createSvgEl("text", {
+      x: width / 2,
+      y: height / 2 - 14,
+      "text-anchor": "middle",
+      "font-size": 22,
+      "font-weight": 700,
+      fill: titleColor,
+    });
+    titleEl.textContent = String(title || "Graph unavailable");
+    const detailEl = createSvgEl("text", {
+      x: width / 2,
+      y: height / 2 + 18,
+      "text-anchor": "middle",
+      "font-size": 14,
+      "font-weight": 500,
+      fill: detailColor,
+    });
+    detailEl.textContent = String(detail || "");
+    g.appendChild(titleEl);
+    g.appendChild(detailEl);
+    svg.appendChild(g);
   }
 
   if (!topic || !supporting) {
     metaEl.textContent = "Missing query params: topic and supporting are required.";
     if (preferredMetaEl) preferredMetaEl.textContent = metaEl.textContent;
-    if (preferredSvg) {
-      const emptyW = 1280;
-      const emptyH = 540;
-      preferredSvg.innerHTML = "";
-      preferredSvg.setAttribute("viewBox", `0 0 ${emptyW} ${emptyH}`);
-      const g = createSvgEl("g", {});
-      const t1 = createSvgEl("text", {
-        x: emptyW / 2,
-        y: emptyH / 2 - 10,
-        "text-anchor": "middle",
-        "font-size": 20,
-        "font-weight": 700,
-        fill: "#7f1d1d",
-      });
-      t1.textContent = "Missing query params";
-      const t2 = createSvgEl("text", {
-        x: emptyW / 2,
-        y: emptyH / 2 + 20,
-        "text-anchor": "middle",
-        "font-size": 14,
-        "font-weight": 500,
-        fill: "#374151",
-      });
-      t2.textContent = "Please open from Review page so topic/supporting are included.";
-      g.appendChild(t1);
-      g.appendChild(t2);
-      preferredSvg.appendChild(g);
-    }
+    renderMainGraphMessage("Missing query params", "Please open from Review page so topic/supporting are included.");
     return;
   }
 
-  backLink.href = `./review_category.html?type=${encodeURIComponent(sentiment.toLowerCase())}`;
-  metaEl.textContent = `topic=${topic}, sentiment=${sentiment}, supporting=${supporting}, attack_mode=${attackMode}, attack_depth=${attackDepth}, focus_only=${focusOnly}`;
+  const backParams = new URLSearchParams();
+  backParams.set("type", String(sentiment || "").toLowerCase());
+  if (selectedTopicLabel) backParams.set("topic", selectedTopicLabel);
+  backLink.href = `./review_category.html?${backParams.toString()}`;
+  metaEl.textContent = `topic=${topic}, sentiment=${sentiment}, supporting=${supporting}, layer_mode=${selectedLayerMode}, attack_mode=${attackMode}, attack_depth=${attackDepth}, focus_only=${focusOnly}`;
 
   function setToggleButton(meta) {
     if (!toggleAllBtn || !meta) return;
@@ -155,6 +225,27 @@
     if (graphSummaryMetaEl) {
       graphSummaryMetaEl.textContent = meta;
     }
+    scheduleWorkspaceLayoutSync();
+  }
+
+  function setAcceptedNaturalLanguageOutput(text, meta = "") {
+    if (acceptedNaturalLanguageEl) {
+      acceptedNaturalLanguageEl.textContent = text == null || text === "" ? "-" : String(text);
+    }
+    if (acceptedNaturalMetaEl) {
+      acceptedNaturalMetaEl.textContent = meta;
+    }
+  }
+
+  function setLlmWaitingForSemantics() {
+    setNaturalLanguageOutput(
+      "Waiting for semantics evaluation...",
+      "LLM will start after semantics are ready."
+    );
+    setAcceptedNaturalLanguageOutput(
+      "Waiting for semantics evaluation...",
+      "LLM will start after semantics are ready."
+    );
   }
 
   function buildFallbackGraphSummary() {
@@ -167,106 +258,328 @@
     const lines = [
       `- This graph contains ${nodes.length} node(s), including ${claims.length} main claim node(s) and ${assumptions.length} assumption node(s).`,
       `- There are ${supportCount} supporting link(s) and ${attackCount} conflicting link(s).`,
-      `- Under ${selectedSemantics} + ${selectedStrategy}, the graph structure is analyzed as one reasoning map.`,
+      "- This summary is based on the current graph structure rather than a specific semantics filter.",
       "- Focus on how supporting and conflicting links shape the final interpretation.",
     ];
     return lines.join("\n");
   }
 
-  async function summarizeGraphForUsers(result) {
+  function formatLlmMeta(data) {
+    const provider = String(data?.provider || "ollama").trim();
+    const model = String(data?.model || selectedLlmModel || "").trim();
+    const parts = [model ? `${provider}:${model}` : provider];
+    const elapsedMs = Number(data?.elapsed_ms);
+    if (Number.isFinite(elapsedMs) && elapsedMs >= 0) {
+      parts.push(`elapsed=${formatDurationMs(elapsedMs)}`);
+    }
+    return parts.join(", ");
+  }
+
+  function buildGraphSummaryCacheKey(nodes, edges) {
+    return JSON.stringify({
+      topic,
+      sentiment,
+      supporting,
+      layerMode: selectedLayerMode,
+      attackMode,
+      attackDepth,
+      focusOnly,
+      showAllContrary,
+      model: selectedLlmModel,
+      nodes: Array.isArray(nodes)
+        ? nodes.map((n) => ({
+            id: n?.id || "",
+            type: n?.type || "",
+            label: n?.label || "",
+            clusterSentiment: n?.clusterSentiment || "",
+            count: n?.count ?? null,
+          }))
+        : [],
+      edges: Array.isArray(edges)
+        ? edges.map((e) => ({
+            source: e?.source || "",
+            target: e?.target || "",
+            type: e?.type || "",
+          }))
+        : [],
+    });
+  }
+
+  function waitMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+  }
+
+  function stableStringify(value) {
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+    }
+    if (value && typeof value === "object") {
+      const keys = Object.keys(value).sort();
+      return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  async function requestLlmExplanationJob(payload) {
+    const payloadObj = payload || {};
+    const payloadKey = stableStringify(payloadObj);
+    const existing = llmJobPendingByKey.get(payloadKey);
+    if (existing) return existing;
+
+    const pending = (async () => {
+      async function createLlmJob() {
+        const createResp = await apiFetch("/api/llm/translate-extension/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payloadObj),
+        });
+        const created = await createResp.json();
+        if (!createResp.ok || !created?.job_id) {
+          throw new Error(created?.error || "Failed to create LLM job");
+        }
+        const id = String(created.job_id || "").trim();
+        if (!id) throw new Error("Invalid LLM job id");
+        return id;
+      }
+
+      let recreateCount = 0;
+      let jobId = await createLlmJob();
+      const deadline = Date.now() + LLM_JOB_POLL_TIMEOUT_MS;
+
+      while (Date.now() <= deadline) {
+        const statusResp = await apiFetch(
+          `/api/llm/translate-extension/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`,
+          {
+          method: "GET",
+          cache: "no-store",
+          timeoutMs: 15000,
+        });
+        const statusData = await statusResp.json();
+        if (!statusResp.ok) {
+          if (statusResp.status === 404 && recreateCount < JOB_NOT_FOUND_RECREATE_MAX) {
+            recreateCount += 1;
+            jobId = await createLlmJob();
+            await waitMs(LLM_JOB_POLL_INTERVAL_MS);
+            continue;
+          }
+          throw new Error(statusData?.error || "Failed to fetch LLM job status");
+        }
+        const status = String(statusData?.status || "").trim().toLowerCase();
+        if (status === "done") {
+          if (!statusData?.result?.text) throw new Error("LLM job completed without content");
+          return statusData.result;
+        }
+        if (status === "failed") {
+          throw new Error(statusData?.error || "LLM job failed");
+        }
+        await waitMs(LLM_JOB_POLL_INTERVAL_MS);
+      }
+
+      throw new Error("LLM job polling timed out");
+    })()
+      .finally(() => {
+        llmJobPendingByKey.delete(payloadKey);
+      });
+
+    llmJobPendingByKey.set(payloadKey, pending);
+    return pending;
+  }
+
+  async function requestPyArgEvaluationJob(payload, options = {}) {
+    const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+    const payloadObj = payload || {};
+    const payloadKey = stableStringify(payloadObj);
+    const existing = pyargJobPendingByKey.get(payloadKey);
+    if (existing) {
+      if (onProgress) {
+        onProgress({
+          status: "running",
+          jobId: existing.jobId || null,
+          elapsedMs: Math.max(0, Date.now() - existing.startedAt),
+        });
+      }
+      return existing.promise;
+    }
+
+    const state = {
+      jobId: null,
+      startedAt: Date.now(),
+      promise: null,
+    };
+
+    state.promise = (async () => {
+      async function createPyArgJob() {
+        const createResp = await apiFetch("/api/pyarg/evaluate/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          timeoutMs: 15000,
+          body: JSON.stringify(payloadObj),
+        });
+        const created = await createResp.json();
+        if (!createResp.ok || !created?.job_id) {
+          throw new Error(created?.error || "Failed to create PyArg job");
+        }
+        const id = String(created.job_id || "").trim();
+        if (!id) throw new Error("Invalid PyArg job id");
+        return id;
+      }
+
+      let recreateCount = 0;
+      let jobId = await createPyArgJob();
+      state.jobId = jobId;
+      const deadline = Date.now() + PYARG_JOB_POLL_TIMEOUT_MS;
+      if (onProgress) onProgress({ status: "queued", jobId, elapsedMs: 0 });
+
+      while (Date.now() <= deadline) {
+        const statusResp = await apiFetch(
+          `/api/pyarg/evaluate/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`,
+          {
+          method: "GET",
+          cache: "no-store",
+          timeoutMs: 15000,
+        });
+        const statusData = await statusResp.json();
+        if (!statusResp.ok) {
+          if (statusResp.status === 404 && recreateCount < JOB_NOT_FOUND_RECREATE_MAX) {
+            recreateCount += 1;
+            jobId = await createPyArgJob();
+            state.jobId = jobId;
+            if (onProgress) {
+              onProgress({
+                status: "requeued",
+                jobId,
+                elapsedMs: Math.max(0, Date.now() - state.startedAt),
+              });
+            }
+            await waitMs(PYARG_JOB_POLL_INTERVAL_MS);
+            continue;
+          }
+          throw new Error(statusData?.error || "Failed to fetch PyArg job status");
+        }
+        const status = String(statusData?.status || "").trim().toLowerCase();
+        if (onProgress) {
+          onProgress({
+            status: status || "running",
+            jobId,
+            elapsedMs: Math.max(0, Date.now() - state.startedAt),
+          });
+        }
+        if (status === "done") {
+          if (!statusData?.result) throw new Error("PyArg job completed without result");
+          return statusData.result;
+        }
+        if (status === "failed") {
+          throw new Error(statusData?.error || "PyArg job failed");
+        }
+        await waitMs(PYARG_JOB_POLL_INTERVAL_MS);
+      }
+
+      throw new Error("PyArg job polling timed out");
+    })()
+      .finally(() => {
+        pyargJobPendingByKey.delete(payloadKey);
+      });
+
+    pyargJobPendingByKey.set(payloadKey, state);
+    return state.promise;
+  }
+
+  async function summarizeGraphForUsers(requestId = graphSummarySeq) {
     if (!graphSummaryTextEl) return;
     const nodes = (lastLoadedGraph?.nodes || []).map((n) => n?.data || n).filter(Boolean);
     const edges = (lastLoadedGraph?.edges || []).map((e) => e?.data || e).filter(Boolean);
     const supportCount = edges.filter((e) => String(e?.type || "") === "support").length;
     const attackCount = edges.filter((e) => String(e?.type || "") === "attack").length;
-    const acceptedAssumptions = Array.isArray(result?.accepted_assumptions) ? result.accepted_assumptions : [];
     if (!nodes.length) {
       setGraphSummaryOutput("-", "");
       return;
     }
-
-    setGraphSummaryOutput("Summarizing graph with LLM...", "");
+    const cacheKey = buildGraphSummaryCacheKey(nodes, edges);
+    setGraphSummaryOutput("LLM is evaluating this graph for users...", `${selectedLlmModel} is processing...`);
     try {
-      const resp = await apiFetch("/api/llm/translate-extension", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task: "graph_summary",
-          model: selectedLlmModel,
-          topic,
-          sentiment,
-          supporting,
-          semantics: selectedSemantics,
-          strategy: selectedStrategy,
-          graphNodes: nodes.map((n) => ({
-            id: n.id,
-            type: n.type,
-            label: n.label,
-            clusterSentiment: n.clusterSentiment,
-          })),
-          graphEdgeStats: {
-            total: edges.length,
-            support: supportCount,
-            attack: attackCount,
-          },
-          acceptedAssumptions,
-          outputLanguage: "en",
-        }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.error || "Graph summary API failed");
-      const text = String(data?.text || "-");
-      const meta = data?.provider ? `LLM: ${data.provider}${data.model ? ` (${data.model})` : ""}` : "";
-      setGraphSummaryOutput(text, meta);
+      let pending = graphSummaryPending.get(cacheKey);
+      if (!pending) {
+        pending = (async () => {
+          const data = await requestLlmExplanationJob({
+            task: "graph_summary",
+            model: selectedLlmModel,
+            topic,
+            sentiment,
+            supporting,
+            graphNodes: nodes.map((n) => ({
+              id: n.id,
+              type: n.type,
+              label: n.label,
+              clusterSentiment: n.clusterSentiment,
+              count: n.count,
+            })),
+            graphEdges: edges.map((e) => ({
+              source: e.source,
+              target: e.target,
+              type: e.type,
+            })),
+            graphEdgeStats: {
+              total: edges.length,
+              support: supportCount,
+              attack: attackCount,
+            },
+            outputLanguage: "en",
+          });
+          return {
+            text: String(data.text || "-"),
+            meta: formatLlmMeta(data),
+          };
+        })()
+          .finally(() => {
+            graphSummaryPending.delete(cacheKey);
+          });
+        graphSummaryPending.set(cacheKey, pending);
+      }
+      const entry = await pending;
+      if (requestId !== graphSummarySeq) return;
+      setGraphSummaryOutput(String(entry.text || "-"), String(entry.meta || ""));
     } catch (err) {
+      if (requestId !== graphSummarySeq) return;
       console.error(err);
-      setGraphSummaryOutput(buildFallbackGraphSummary(), "LLM unavailable (fallback summary)");
+      setGraphSummaryOutput(buildFallbackGraphSummary(), "LLM unavailable");
     }
   }
 
-  async function translateExtensionsToNaturalLanguage(result) {
+  async function explainFormalSemantics(result) {
     if (!extensionNaturalLanguageEl) return;
     lastSemanticsResult = result || null;
     const extensions = getCurrentExplanationExtensions(result);
     const acceptedAssumptions = getCurrentExplanationAcceptedAssumptions(result);
+    const requestId = ++llmRequestSeq;
     if (!extensions.length) {
       setNaturalLanguageOutput("-", "");
-      setGraphSummaryOutput("-", "");
+      setAcceptedNaturalLanguageOutput("-", "");
       return;
     }
-    setNaturalLanguageOutput("Translating with LLM...", "");
-    setGraphSummaryOutput("Summarizing graph with LLM...", "");
+    setNaturalLanguageOutput("LLM is evaluating the current extension set...", `${selectedLlmModel} is processing...`);
     try {
-      const currentExtensionText = extensions.length
-        ? extensions.map((ext) => `{${ext.join(", ")}}`).join("\n")
-        : "{}";
-      const resp = await apiFetch("/api/llm/translate-extension", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          task: "translate_current_extension",
-          model: selectedLlmModel,
-          topic,
-          sentiment,
-          supporting,
-          semantics: selectedSemantics,
-          strategy: selectedStrategy,
-          extensions,
-          acceptedAssumptions,
-          currentExtensionText,
-          outputLanguage: "en",
-        }),
+      const currentExtensionText = extensions.map((ext) => `{${ext.join(", ")}}`).join("\n");
+      const data = await requestLlmExplanationJob({
+        task: "translate_current_extension",
+        model: selectedLlmModel,
+        topic,
+        sentiment,
+        supporting,
+        semantics: selectedSemantics,
+        strategy: selectedStrategy,
+        extensions,
+        acceptedAssumptions,
+        currentExtensionText,
+        outputLanguage: "en",
       });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.error || "Translation API failed");
-      const text = String(data?.text || "-");
-      const meta = data?.provider ? `LLM: ${data.provider}${data.model ? ` (${data.model})` : ""}` : "";
-      setNaturalLanguageOutput(text, meta);
+      if (requestId !== llmRequestSeq) return;
+      if (!data?.text) throw new Error("Translation API failed");
+      setNaturalLanguageOutput(String(data.text || "-"), formatLlmMeta(data));
     } catch (err) {
+      if (requestId !== llmRequestSeq) return;
       console.error(err);
-      setNaturalLanguageOutput("Cannot translate to natural language right now (LLM is unavailable).", "LLM unavailable");
+      setNaturalLanguageOutput("Cannot explain the formal semantics right now.", "LLM unavailable");
     }
-    await summarizeGraphForUsers(result);
   }
 
   function normalizeExtensions(extensions) {
@@ -276,21 +589,43 @@
       .map((ext) => ext.map((x) => String(x)).filter(Boolean));
   }
 
+  function makeHelperContraryAtom(assumption) {
+    return `__ctr__${String(assumption || "").trim()}`;
+  }
+
+  function getHelperContrarySet(payload) {
+    const values = Object.values(payload?.helperContraries || {});
+    return new Set(values.map((x) => String(x || "").trim()).filter(Boolean));
+  }
+
+  function filterExtensionsForDisplay(extensions, payload) {
+    const helperContrarySet = getHelperContrarySet(payload);
+    const assumptionsSet = new Set((payload?.assumptions || []).map((x) => String(x || "").trim()).filter(Boolean));
+    return normalizeExtensions(extensions).map((ext) =>
+      ext.filter((item) => {
+        const value = String(item || "").trim();
+        if (!value) return false;
+        if (helperContrarySet.has(value) || value.startsWith("__ctr__")) return false;
+        if (assumptionsSet.size && !assumptionsSet.has(value)) return false;
+        return true;
+      })
+    );
+  }
+
+  function getExtensionSetsForDisplay(result) {
+    const rawExts = normalizeExtensions(result?.raw_extensions);
+    if (rawExts.length) return rawExts;
+    return normalizeExtensions(result?.extensions);
+  }
+
   function getCurrentExplanationExtensions(result) {
-    const normalizedExts = normalizeExtensions(result?.extensions);
-    if (!normalizedExts.length) return [];
-    // Current Explanation should show all extension sets for the selected semantics.
-    return normalizedExts;
+    const filteredExts = filterExtensionsForDisplay(result?.extensions, lastSemanticsPayload);
+    return filteredExts.length ? filteredExts : [];
   }
 
   function getCurrentExplanationAcceptedAssumptions(result) {
     const currentExts = getCurrentExplanationExtensions(result);
-    if (!currentExts.length) return [];
-    const merged = new Set();
-    for (const ext of currentExts) {
-      for (const item of ext) merged.add(String(item));
-    }
-    return [...merged].filter(Boolean);
+    return computeAcceptedAssumptions(currentExts, selectedStrategy);
   }
 
   function computeAcceptedAssumptions(extensions, strategy) {
@@ -332,46 +667,113 @@
     }
   }
 
+  function setPayloadJsonOutput(value) {
+    if (!payloadJsonOutputEl) return;
+    payloadJsonOutputEl.textContent = value == null || value === "" ? "-" : String(value);
+  }
+
+  function buildSemanticsCacheKey(payload) {
+    return JSON.stringify({
+      topic,
+      sentiment,
+      supporting,
+      layerMode: selectedLayerMode,
+      semantics: payload?.semantics_specification || selectedSemantics,
+      strategy: payload?.strategy_specification || selectedStrategy,
+      attackMode,
+      attackDepth,
+      focusOnly,
+      showAllContrary,
+      query: payload?.query || null,
+      language: Array.isArray(payload?.language) ? payload.language : [],
+      assumptions: Array.isArray(payload?.assumptions) ? payload.assumptions : [],
+      contraries: payload?.contraries || {},
+      rules: Array.isArray(payload?.rules)
+        ? payload.rules.map((rule) => ({
+            premises: Array.isArray(rule?.premises) ? rule.premises : [],
+            conclusion: rule?.conclusion || "",
+          }))
+        : [],
+    });
+  }
+
+  function buildCachedSemanticsDisplay(result) {
+    const displayedExts = getExtensionSetsForDisplay(result);
+    return {
+      extensionLabels: displayedExts.length
+        ? displayedExts.map((ext) => `{${ext.join(", ")}}`)
+        : ["{}"],
+      acceptedAssumptions: getCurrentExplanationAcceptedAssumptions(result),
+      summary: buildSemanticsSummary(result),
+    };
+  }
+
+  function renderCachedSemanticsDisplay(display) {
+    renderTokens(extensionListEl, display?.extensionLabels || ["{}"], "{}");
+    renderTokens(acceptedAssumptionsEl, display?.acceptedAssumptions || [], "-");
+  }
+
+  function setSemanticsWaitingDisplay() {
+    renderTokens(
+      extensionListEl,
+      ["Waiting for semantics evaluation..."],
+      "Waiting for semantics evaluation..."
+    );
+    renderTokens(
+      acceptedAssumptionsEl,
+      ["Waiting for semantics evaluation..."],
+      "Waiting for semantics evaluation..."
+    );
+  }
+
   function renderFilterResults(result) {
-    const normalizedExts = normalizeExtensions(result?.extensions);
-    const currentExts = getCurrentExplanationExtensions(result);
-    const extensionLabels = currentExts.length
-      ? currentExts.map((ext) => `{${ext.join(", ")}}`)
+    const displayedExts = getExtensionSetsForDisplay(result);
+    const extensionLabels = displayedExts.length
+      ? displayedExts.map((ext) => `{${ext.join(", ")}}`)
       : ["{}"];
-    const acceptedFromApi = Array.isArray(result?.accepted_assumptions)
-      ? result.accepted_assumptions.map((x) => String(x))
-      : null;
-    const accepted = acceptedFromApi || computeAcceptedAssumptions(normalizedExts, selectedStrategy);
+    const accepted = getCurrentExplanationAcceptedAssumptions(result);
     renderTokens(extensionListEl, extensionLabels, "{}");
     renderTokens(acceptedAssumptionsEl, accepted, "-");
   }
 
-  function getMaxVisibleLevel() {
-    return selectedLayerMode === "layer1" ? 2 : 5;
+  function buildSemanticsSummary(result) {
+    const displayedExts = getExtensionSetsForDisplay(result);
+    const accepted = getCurrentExplanationAcceptedAssumptions(result);
+    const extensionCount = Number(result?.count);
+    const safeExtensionCount = Number.isFinite(extensionCount) ? extensionCount : displayedExts.length;
+    const elapsedMs = Number(result?.elapsed_ms);
+    const parts = [
+      `extensions=${safeExtensionCount}`,
+      `accepted=${accepted.length}`,
+      `strategy=${selectedStrategy}`,
+      `credulous=${result?.credulous == null ? "-" : String(result.credulous)}`,
+      `skeptical=${result?.skeptical == null ? "-" : String(result.skeptical)}`,
+    ];
+    if (Number.isFinite(elapsedMs) && elapsedMs >= 0) {
+      parts.push(`elapsed=${formatDurationMs(elapsedMs)}`);
+    }
+    return parts.join(", ");
   }
 
-  const WIDTH = 1280;
-  const HEIGHT = 760;
+  function formatDurationMs(ms) {
+    const value = Number(ms);
+    if (!Number.isFinite(value) || value < 0) return "-";
+    if (value < 1000) return `${Math.round(value)}ms`;
+    return `${(value / 1000).toFixed(value >= 10000 ? 1 : 2)}s`;
+  }
+
+  const BASE_CANVAS_WIDTH = 1560;
+  const BASE_CANVAS_HEIGHT = 900;
   const view = { x: 0, y: 0, scale: 1 };
 
   const nodePos = new Map();
   const nodeById = new Map();
   const nodeMetrics = new Map();
   const connectedByNode = new Map();
+  const LEVEL5 = 5;
   let scene = null;
 
-  const PREF_WIDTH = 1280;
-  const PREF_HEIGHT = 540;
   const LOCK_AUTO_LAYOUT = false;
-  let preferredCanvasWidth = PREF_WIDTH;
-  let preferredCanvasHeight = PREF_HEIGHT;
-  const preferredView = { x: 0, y: 0, scale: 1 };
-  const preferredNodePos = new Map();
-  const preferredNodeById = new Map();
-  const preferredNodeMetrics = new Map();
-  const preferredConnectedByNode = new Map();
-  let preferredScene = null;
-
   function createSvgEl(name, attrs) {
     const el = document.createElementNS("http://www.w3.org/2000/svg", name);
     Object.entries(attrs || {}).forEach(([k, v]) => el.setAttribute(k, String(v)));
@@ -577,6 +979,20 @@
     scene.world.setAttribute("transform", `translate(${view.x} ${view.y}) scale(${view.scale})`);
   }
 
+  function zoomGraphByFactor(factor) {
+    if (!svg || !scene) return;
+    const panel = svg.closest(".graph-panel");
+    if (!panel) return;
+    const rect = svg.getBoundingClientRect();
+    const centerClientX = rect.left + panel.clientWidth / 2;
+    const centerClientY = rect.top + panel.clientHeight / 2;
+    const worldBefore = clientToWorld(centerClientX, centerClientY);
+    view.scale = clamp(view.scale * factor, 0.55, 3.2);
+    view.x = centerClientX - rect.left - worldBefore.x * view.scale;
+    view.y = centerClientY - rect.top - worldBefore.y * view.scale;
+    setWorldTransform();
+  }
+
   function clientToWorld(clientX, clientY) {
     const rect = svg.getBoundingClientRect();
     return {
@@ -624,12 +1040,12 @@
     const pad = 44;
     const fitW = Math.max(1, viewportW - pad * 2);
     const fitH = Math.max(1, viewportH - pad * 2);
-    const safeMargin = selectedLayerMode === "layer2" ? 120 : 72;
+    const safeMargin = 120;
     const fitScale = Math.min(
       fitW / (bounds.width + safeMargin * 2),
       fitH / (bounds.height + safeMargin * 2)
     );
-    const minReadableScale = selectedLayerMode === "layer2" ? 0.78 : 0.65;
+    const minReadableScale = 0.78;
     const nextScale = clamp(fitScale, minReadableScale, 3.2);
     const cx = (bounds.minX + bounds.maxX) / 2;
     const cy = (bounds.minY + bounds.maxY) / 2;
@@ -649,21 +1065,120 @@
     setWorldTransform();
   }
 
-  function preprocessGraph(rawGraph) {
-    const allNodes = (rawGraph.nodes || []).map((n) => n.data);
-    const allEdges = (rawGraph.edges || []).map((e) => e.data);
+  function buildDisplayGraphModel(rawGraph) {
+    const focusSupportingLabel = String(supporting || "").trim().toLowerCase();
+    const selectedClaim = String(rawGraph?.meta?.selectedClaim || "").trim();
+    const opposingClaim = String(rawGraph?.meta?.opposingClaim || "").trim();
+    const defenseLayerLabel = rawGraph?.meta?.defenseLayerSynthetic
+      ? String(rawGraph?.meta?.defenseLayerLabel || "").trim()
+      : "";
+    const defenseLayerDisplay = rawGraph?.meta?.defenseLayerSynthetic
+      ? String(rawGraph?.meta?.selectedClaim || "").trim()
+      : "";
+    const allNodes = (rawGraph.nodes || []).map((n) => {
+      const data = n.data;
+      if (
+        data &&
+        data.type === "claim" &&
+        defenseLayerLabel &&
+        defenseLayerDisplay &&
+        String(data.label || "").trim() === defenseLayerLabel
+      ) {
+        return {
+          ...data,
+          label: defenseLayerDisplay,
+        };
+      }
+      return data;
+    });
+    const selectedClaimClusterId = selectedClaim ? `framework::${selectedClaim}` : "";
+    const opposingClaimClusterId = opposingClaim ? `framework::${opposingClaim}` : "";
+    const defenseLayerClusterId = defenseLayerLabel ? `framework::${defenseLayerLabel}` : "";
+    const duplicateNodeRedirects = new Map();
+    if (selectedClaimClusterId && defenseLayerClusterId) {
+      const selectedClaimPropositionsByLabel = new Map();
+      for (const node of allNodes) {
+        if (node?.type !== "proposition" || String(node?.clusterId || "") !== selectedClaimClusterId) continue;
+        const key = String(node?.label || "").trim().toLowerCase();
+        if (key && !selectedClaimPropositionsByLabel.has(key)) selectedClaimPropositionsByLabel.set(key, node.id);
+      }
+      for (const node of allNodes) {
+        if (node?.type !== "proposition" || String(node?.clusterId || "") !== defenseLayerClusterId) continue;
+        const key = String(node?.label || "").trim().toLowerCase();
+        const keeperId = selectedClaimPropositionsByLabel.get(key);
+        if (keeperId && keeperId !== node.id) {
+          duplicateNodeRedirects.set(node.id, keeperId);
+        }
+      }
+    }
+    const allEdges = (rawGraph.edges || []).map((e) => {
+      const data = e.data || {};
+      return {
+        ...data,
+        source: duplicateNodeRedirects.get(data.source) || data.source,
+        target: duplicateNodeRedirects.get(data.target) || data.target,
+      };
+    });
     const clusters = rawGraph.clusters || [];
 
     const claimsByCluster = new Map();
     const rulesByCluster = new Map();
+    const nodeById = new Map();
     for (const n of allNodes) {
+      nodeById.set(n.id, n);
       if (n.type === "claim") claimsByCluster.set(n.clusterId, n.id);
       if (n.type === "rule") rulesByCluster.set(n.clusterId, n.id);
     }
 
-    // hide rule nodes only
+    const nodesToHide = new Set();
+    if (defenseLayerClusterId) {
+      for (const node of allNodes) {
+        if (String(node?.clusterId || "") !== defenseLayerClusterId) continue;
+        if (selectedLayerMode === "layer1") {
+          nodesToHide.add(node.id);
+          continue;
+        }
+        if (node?.type === "claim" || node?.type === "assumption") {
+          nodesToHide.add(node.id);
+        }
+      }
+    }
+
+    // For UI Layer 1, keep only the opposite propositions that attack selected-side assumptions.
+    if (selectedLayerMode === "layer1" && opposingClaimClusterId) {
+      for (const node of allNodes) {
+        if (String(node?.clusterId || "") !== opposingClaimClusterId) continue;
+    
+        if (node?.type === "claim" || node?.type === "assumption") {
+          nodesToHide.add(node.id);
+        }
+      }
+    } else if (opposingClaimClusterId) {
+      let opposingClusterHasAttack = false;
+      for (const edge of allEdges) {
+        if (edge?.type !== "attack") continue;
+        const srcNode = nodeById.get(edge.source);
+        const tgtNode = nodeById.get(edge.target);
+        if (!srcNode || !tgtNode) continue;
+        if (
+          String(srcNode.clusterId || "") === opposingClaimClusterId ||
+          String(tgtNode.clusterId || "") === opposingClaimClusterId
+        ) {
+          opposingClusterHasAttack = true;
+          break;
+        }
+      }
+      if (!opposingClusterHasAttack) {
+        const opposingClaimNodeId = claimsByCluster.get(opposingClaimClusterId);
+        if (opposingClaimNodeId) nodesToHide.add(opposingClaimNodeId);
+      }
+    }
+
+    // Hide rule nodes and synthetic-C proposition duplicates that are merged into cluster A.
     const visibleNodes = allNodes.filter((n) => {
       if (n.type === "rule") return false;
+      if (duplicateNodeRedirects.has(n.id)) return false;
+      if (nodesToHide.has(n.id)) return false;
       return true;
     });
     const visibleById = new Set(visibleNodes.map((n) => n.id));
@@ -683,14 +1198,14 @@
     // flatten support: premise -> claim (rule hidden)
     for (const e of allEdges) {
       if (e.type !== "support") continue;
-      const srcNode = allNodes.find((n) => n.id === e.source);
-      const tgtNode = allNodes.find((n) => n.id === e.target);
+      const srcNode = nodeById.get(e.source);
+      const tgtNode = nodeById.get(e.target);
       if (!srcNode || !tgtNode) continue;
       if (srcNode.type === "rule" || tgtNode.type === "rule") {
         const clusterId = srcNode.type === "rule" ? srcNode.clusterId : tgtNode.clusterId;
         const claimId = claimsByCluster.get(clusterId);
         const premiseId = srcNode.type === "rule" ? e.target : e.source;
-        const premiseNode = allNodes.find((n) => n.id === premiseId);
+        const premiseNode = nodeById.get(premiseId);
         if (premiseNode && premiseNode.type !== "claim" && premiseNode.type !== "rule") {
           addUiEdge(premiseId, claimId, "support");
         }
@@ -702,9 +1217,19 @@
     // keep attack edges directly between visible nodes
     for (const e of allEdges) {
       if (e.type !== "attack") continue;
-      const srcNode = allNodes.find((n) => n.id === e.source);
-      const tgtNode = allNodes.find((n) => n.id === e.target);
+      const srcNode = nodeById.get(e.source);
+      const tgtNode = nodeById.get(e.target);
       if (!srcNode || !tgtNode) continue;
+
+      // Hide direct attacks from the selected supporting reason to assumptions
+      // under the opposing claim cluster (works for all topics via query param).
+      const srcLabel = String(srcNode.label || "").trim().toLowerCase();
+      const isFromFocusedSupporting = focusSupportingLabel && srcLabel === focusSupportingLabel;
+      const isTargetOpposingAssumption =
+        tgtNode.type === "assumption" &&
+        String(tgtNode.clusterId || "") === String(opposingClaimClusterId || "");
+      if (isFromFocusedSupporting && isTargetOpposingAssumption) continue;
+
       addUiEdge(e.source, e.target, "attack");
     }
 
@@ -714,7 +1239,77 @@
       edges: Array.from(uiEdgeMap.values()),
       claimsByCluster,
       rulesByCluster,
+      displayRows: Array.isArray(rawGraph?.displayRows) ? rawGraph.displayRows : [],
     };
+  }
+
+  function uniqueNodes(nodes) {
+    const seen = new Set();
+    const out = [];
+    for (const node of nodes || []) {
+      if (!node?.id || seen.has(node.id)) continue;
+      seen.add(node.id);
+      out.push(node);
+    }
+    return out;
+  }
+
+  function sortNodesForRow(nodes) {
+    return [...(nodes || [])].sort((a, b) => {
+      const typeRank = { claim: 0, proposition: 1, assumption: 2 };
+      const rankDiff = (typeRank[a?.type] ?? 9) - (typeRank[b?.type] ?? 9);
+      if (rankDiff !== 0) return rankDiff;
+      if (!!a?.isFocus !== !!b?.isFocus) return a?.isFocus ? -1 : 1;
+      return String(a?.label || "").localeCompare(String(b?.label || ""));
+    });
+  }
+
+  function splitRowIntoChunks(nodes, maxPerChunk = 8) {
+    if (!Array.isArray(nodes) || !nodes.length) return [];
+    const chunks = [];
+    for (let i = 0; i < nodes.length; i += maxPerChunk) {
+      chunks.push(nodes.slice(i, i + maxPerChunk));
+    }
+    return chunks;
+  }
+
+  function buildLayoutRows(graph) {
+    const nodeById = new Map((graph?.nodes || []).map((node) => [node.id, node]));
+    const explicitRows = Array.isArray(graph?.displayRows) ? graph.displayRows : [];
+    const mappedRows = explicitRows
+      .map((row) => (Array.isArray(row) ? row.map((id) => nodeById.get(id)).filter(Boolean) : []))
+      .map((row) => sortNodesForRow(uniqueNodes(row)))
+      .filter((row) => row.length);
+
+    if (mappedRows.length) return mappedRows;
+
+    const rowsByLevel = new Map();
+    for (const node of graph?.nodes || []) {
+      const level = Number.isFinite(Number(node?.level)) ? Number(node.level) : 99;
+      if (!rowsByLevel.has(level)) rowsByLevel.set(level, []);
+      rowsByLevel.get(level).push(node);
+    }
+    return [...rowsByLevel.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, rowNodes]) => sortNodesForRow(uniqueNodes(rowNodes)))
+      .filter((row) => row.length);
+  }
+
+  function positionRowNodes(rowNodes, y, canvasWidth) {
+    const gap = rowNodes.some((node) => node.type === "claim") ? 40 : 28;
+    const rowWidth = rowNodes.reduce((sum, node) => sum + nodeSize(node).w, 0) + gap * Math.max(0, rowNodes.length - 1);
+    let x = (canvasWidth - rowWidth) / 2;
+    let tallest = 0;
+    for (const node of rowNodes) {
+      const metric = nodeSize(node);
+      tallest = Math.max(tallest, metric.h);
+      nodePos.set(node.id, {
+        x: x + metric.w / 2,
+        y: y + metric.h / 2,
+      });
+      x += metric.w + gap;
+    }
+    return tallest;
   }
 
   function buildInitialLayout(graph) {
@@ -722,66 +1317,41 @@
     nodeById.clear();
     for (const n of graph.nodes) nodeById.set(n.id, n);
 
-    const clusterOrder = graph.clusters.map((c) => c.id);
-    const clusterRects = new Map();
-    if (clusterOrder[0]) clusterRects.set(clusterOrder[0], { x: 40, y: 40, w: 560, h: 680 });
-    if (clusterOrder[1]) clusterRects.set(clusterOrder[1], { x: 680, y: 40, w: 560, h: 680 });
+    const logicalRows = buildLayoutRows(graph);
+    const rows = logicalRows.flatMap((row) => splitRowIntoChunks(row, 8));
+    const outerPadX = 64;
+    const outerPadY = 56;
+    const rowGap = 44;
+    const widestRow = rows.reduce((max, row) => {
+      const gap = row.some((node) => node.type === "claim") ? 40 : 28;
+      const width = row.reduce((sum, node) => sum + nodeSize(node).w, 0) + gap * Math.max(0, row.length - 1);
+      return Math.max(max, width);
+    }, 0);
+    const canvasWidth = Math.max(BASE_CANVAS_WIDTH, widestRow + outerPadX * 2);
 
-    function putNode(id, x, y) {
-      nodePos.set(id, { x, y });
+    let y = outerPadY;
+    for (const row of rows) {
+      const tallest = positionRowNodes(row, y, canvasWidth);
+      y += tallest + rowGap;
     }
 
-    for (const clusterId of clusterOrder) {
-      const r = clusterRects.get(clusterId);
-      if (!r) continue;
+    const canvasHeight = Math.max(BASE_CANVAS_HEIGHT, y - rowGap + outerPadY);
+    const canvasBounds = {
+      x: outerPadX / 2,
+      y: outerPadY / 2,
+      w: canvasWidth - outerPadX,
+      h: canvasHeight - outerPadY,
+    };
 
-      const nodes = graph.nodes.filter((n) => n.clusterId === clusterId);
-      const claim = nodes.find((n) => n.type === "claim");
-      const focusProp = nodes.find((n) => n.type === "proposition" && n.isFocus);
-      const assumptions = nodes
-        .filter((n) => n.type === "assumption")
-        .sort((a, b) => String(a.label || "").localeCompare(String(b.label || "")));
-      const otherProps = nodes
-        .filter((n) => n.type === "proposition" && !n.isFocus)
-        .sort((a, b) => String(a.label || "").localeCompare(String(b.label || "")));
-
-      const cx = r.x + r.w / 2;
-      if (claim) putNode(claim.id, cx, r.y + 95);
-      if (focusProp) putNode(focusProp.id, cx, r.y + 190);
-
-      // row for non-focus propositions (if any)
-      if (otherProps.length) {
-        const step = r.w / (otherProps.length + 1);
-        otherProps.forEach((p, i) => {
-          putNode(p.id, r.x + step * (i + 1), r.y + 265);
-        });
-      }
-
-      // assumptions in compact grid rows
-      if (assumptions.length) {
-        const cols = Math.min(3, Math.max(2, Math.ceil(Math.sqrt(assumptions.length))));
-        const stepX = (r.w - 140) / Math.max(cols - 1, 1);
-        const baseX = r.x + 70;
-        const baseY = r.y + 365;
-        const stepY = 95;
-        assumptions.forEach((a, idx) => {
-          const col = idx % cols;
-          const row = Math.floor(idx / cols);
-          putNode(a.id, baseX + col * stepX, baseY + row * stepY);
-        });
-      }
-
-      // clamp everything into cluster bounds
-      for (const n of nodes) {
-        const pos = nodePos.get(n.id);
-        if (!pos) continue;
-        const sz = nodeSize(n);
-        pos.x = clamp(pos.x, r.x + sz.w / 2, r.x + r.w - sz.w / 2);
-        pos.y = clamp(pos.y, r.y + sz.h / 2, r.y + r.h - sz.h / 2);
-      }
+    for (const n of graph.nodes) {
+      const pos = nodePos.get(n.id);
+      if (!pos) continue;
+      const sz = nodeSize(n);
+      pos.x = clamp(pos.x, canvasBounds.x + sz.w / 2, canvasBounds.x + canvasBounds.w - sz.w / 2);
+      pos.y = clamp(pos.y, canvasBounds.y + sz.h / 2, canvasBounds.y + canvasBounds.h - sz.h / 2);
     }
 
-    return { clusterRects };
+    return { canvasWidth, canvasHeight, canvasBounds };
   }
 
   function updateScene() {
@@ -875,15 +1445,12 @@
     });
   }
 
-  function drawGraph(rawGraph) {
-    const graph = preprocessGraph(rawGraph);
+  function drawGraph(rawGraph, options = {}) {
+    const preserveView = options && options.preserveView === true;
+    const graph = buildDisplayGraphModel(rawGraph);
     nodeMetrics.clear();
     for (const n of graph.nodes) nodeMetrics.set(n.id, getMainNodeMetric(n));
     svg.innerHTML = "";
-    svg.setAttribute("viewBox", `0 0 ${WIDTH} ${HEIGHT}`);
-    svg.setAttribute("width", String(WIDTH));
-    svg.setAttribute("height", String(HEIGHT));
-
     const defs = createSvgEl("defs", {});
     const supportMarker = createSvgEl("marker", {
       id: "arrow-support",
@@ -914,32 +1481,17 @@
     svg.appendChild(world);
 
     const layout = buildInitialLayout(graph);
-    const clusterRects = layout.clusterRects;
-
-    for (const c of graph.clusters) {
-      const r = clusterRects.get(c.id);
-      if (!r) continue;
-      world.appendChild(createSvgEl("rect", {
-        x: r.x,
-        y: r.y,
-        width: r.w,
-        height: r.h,
-        fill: "transparent",
-        stroke: "#374151",
-        "stroke-width": 2,
-        "stroke-dasharray": "10 8",
-        rx: 14,
-      }));
-      const label = createSvgEl("text", {
-        x: r.x + 18,
-        y: r.y + 28,
-        "font-size": 15,
-        "font-weight": 700,
-        fill: "#111827",
-      });
-      label.textContent = c.label;
-      world.appendChild(label);
-    }
+    const canvasWidth = layout.canvasWidth || BASE_CANVAS_WIDTH;
+    const canvasHeight = layout.canvasHeight || BASE_CANVAS_HEIGHT;
+    const canvasBounds = layout.canvasBounds || {
+      x: 32,
+      y: 32,
+      w: canvasWidth - 64,
+      h: canvasHeight - 64,
+    };
+    svg.setAttribute("viewBox", `0 0 ${canvasWidth} ${canvasHeight}`);
+    svg.setAttribute("width", String(canvasWidth));
+    svg.setAttribute("height", String(canvasHeight));
 
     const edgeLayer = createSvgEl("g", {});
     const nodeLayer = createSvgEl("g", {});
@@ -952,9 +1504,9 @@
       const path = createSvgEl("path", {
         d: "M0 0 L0 0",
         fill: "none",
-        stroke: isAttack ? "#dc2626" : "#111827",
-        "stroke-opacity": isAttack ? 0.82 : 0.55,
-        "stroke-width": isAttack ? 2.4 : 1.8,
+        stroke: isAttack ? "#d53932" : "#4b5563",
+        "stroke-opacity": isAttack ? 0.54 : 0.32,
+        "stroke-width": isAttack ? 2.1 : 1.5,
         "marker-end": isAttack ? "url(#arrow-attack)" : "url(#arrow-support)",
       });
       path.dataset.edgeId = e.id;
@@ -988,13 +1540,14 @@
     }
 
     const nodeItems = [];
+    const nodeItemsById = new Map();
     for (const n of graph.nodes) {
       const p = nodePos.get(n.id);
       if (!p) continue;
       const style = typeStyle(n);
       const sz = nodeSize(n);
 
-      const g = createSvgEl("g", { transform: `translate(${p.x} ${p.y})`, style: "cursor: grab;" });
+      const g = createSvgEl("g", { transform: `translate(${p.x} ${p.y})` });
       g.dataset.nodeId = n.id;
       const shape = createSvgEl("ellipse", {
         cx: 0,
@@ -1003,7 +1556,7 @@
         ry: sz.h / 2,
         fill: style.fill,
         stroke: style.stroke,
-        "stroke-width": n.isFocus ? 4 : 2,
+        "stroke-width": n.isFocus ? 3.2 : 2,
         "stroke-dasharray": n.type === "assumption" ? "8 5" : "none",
       });
       g.appendChild(shape);
@@ -1019,36 +1572,115 @@
       titleEl.textContent = displayCount != null ? `${String(n.label || "")} (count=${displayCount})` : String(n.label || "");
       g.appendChild(titleEl);
 
-      const bounds = n.clusterId ? clusterRects.get(n.clusterId) : null;
-      if (!LOCK_AUTO_LAYOUT) attachNodeDrag(g, n, bounds);
+      if (!LOCK_AUTO_LAYOUT) attachNodeDrag(g, n, canvasBounds);
 
       g.addEventListener("mouseenter", () => {
         const connected = connectedByNode.get(n.id) || new Set();
         for (const ei of edgeItems) {
           const on = connected.has(ei.edge.id);
           ei.path.setAttribute("stroke-opacity", on ? "1" : "0.1");
-          ei.path.setAttribute("stroke-width", ei.edge.type === "attack" ? (on ? "3.1" : "1.6") : (on ? "2.3" : "1.2"));
+          ei.path.setAttribute("stroke-width", ei.edge.type === "attack" ? (on ? "2.9" : "1.4") : (on ? "2.1" : "1.05"));
           if (ei.label) ei.label.setAttribute("opacity", on ? "1" : "0.2");
         }
       });
       g.addEventListener("mouseleave", () => {
         for (const ei of edgeItems) {
-          ei.path.setAttribute("stroke-opacity", ei.edge.type === "attack" ? "0.82" : "0.55");
-          ei.path.setAttribute("stroke-width", ei.edge.type === "attack" ? "2.4" : "1.8");
+          ei.path.setAttribute("stroke-opacity", ei.edge.type === "attack" ? "0.54" : "0.32");
+          ei.path.setAttribute("stroke-width", ei.edge.type === "attack" ? "2.1" : "1.5");
           if (ei.label) ei.label.setAttribute("opacity", "1");
         }
       });
 
       nodeLayer.appendChild(g);
-      nodeItems.push({ node: n, group: g });
+      const item = { node: n, group: g };
+      nodeItems.push(item);
+      nodeItemsById.set(n.id, item);
+    }
+
+    const level5AttackersByTarget = new Map();
+    for (const e of graph.edges) {
+      if (e?.type !== "attack") continue;
+      const attacker = nodeById.get(e.source);
+      if (!attacker) continue;
+      const attackerLevel = Number(attacker.level);
+      if (!Number.isFinite(attackerLevel) || attackerLevel !== LEVEL5) continue;
+      if (!level5AttackersByTarget.has(e.target)) level5AttackersByTarget.set(e.target, new Set());
+      level5AttackersByTarget.get(e.target).add(e.source);
+    }
+    const allLevel5AttackerIds = new Set(
+      Array.from(level5AttackersByTarget.values()).flatMap((ids) => Array.from(ids || []))
+    );
+    const toggleTargetIds = new Set(level5AttackersByTarget.keys());
+    const collapsedTargetIds = new Set();
+    const level5AttackPairs = [];
+    for (const e of graph.edges) {
+      if (e?.type !== "attack") continue;
+      if (!allLevel5AttackerIds.has(e.source)) continue;
+      if (!toggleTargetIds.has(e.target)) continue;
+      level5AttackPairs.push({ source: e.source, target: e.target, edgeId: e.id });
+    }
+
+    function applyCollapsedVisibility() {
+      const hiddenLevel5AttackEdgeIds = new Set();
+      const visibleLevel5AttackerIds = new Set();
+      for (const pair of level5AttackPairs) {
+        if (collapsedTargetIds.has(pair.target)) {
+          hiddenLevel5AttackEdgeIds.add(pair.edgeId);
+          continue;
+        }
+        visibleLevel5AttackerIds.add(pair.source);
+      }
+
+      const hiddenNodeIds = new Set();
+      for (const [id, item] of nodeItemsById.entries()) {
+        const isHidden =
+          allLevel5AttackerIds.has(id) &&
+          !toggleTargetIds.has(id) &&
+          !visibleLevel5AttackerIds.has(id);
+        if (isHidden) hiddenNodeIds.add(id);
+        item.group.style.display = isHidden ? "none" : "";
+      }
+
+      for (const ei of edgeItems) {
+        const srcHidden = hiddenNodeIds.has(ei.edge.source);
+        const tgtHidden = hiddenNodeIds.has(ei.edge.target);
+        const hiddenByCollapsedTarget =
+          ei.edge.type === "attack" &&
+          hiddenLevel5AttackEdgeIds.has(ei.edge.id);
+        const hidden = srcHidden || tgtHidden || hiddenByCollapsedTarget;
+        ei.path.style.display = hidden ? "none" : "";
+        if (ei.label) ei.label.style.display = hidden ? "none" : "";
+      }
+    }
+
+    function updateTargetCollapse(targetId) {
+      const attackers = level5AttackersByTarget.get(targetId);
+      if (!attackers || !attackers.size) return;
+      if (collapsedTargetIds.has(targetId)) collapsedTargetIds.delete(targetId);
+      else collapsedTargetIds.add(targetId);
+      applyCollapsedVisibility();
+    }
+
+    for (const item of nodeItems) {
+      const targetId = item?.node?.id;
+      const attackers = level5AttackersByTarget.get(targetId);
+      const canToggleAttackers = !!(attackers && attackers.size);
+      item.group.style.cursor = canToggleAttackers ? "pointer" : "grab";
+      if (!canToggleAttackers) continue;
+      item.group.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        updateTargetCollapse(targetId);
+      });
     }
 
     scene = { world, edgeItems, nodeItems };
     setWorldTransform();
     updateScene();
-    requestAnimationFrame(() => {
-      autoFitMainViewport();
-    });
+    if (!preserveView) {
+      requestAnimationFrame(() => {
+        autoFitMainViewport();
+      });
+    }
   }
 
   function attachPanZoom() {
@@ -1092,10 +1724,6 @@
 
     svg.addEventListener("pointerup", stopPan);
     svg.addEventListener("pointercancel", stopPan);
-    svg.addEventListener("dblclick", () => {
-      autoFitMainViewport();
-    });
-
     window.addEventListener("resize", () => {
       requestAnimationFrame(() => {
         autoFitMainViewport();
@@ -1103,1386 +1731,196 @@
     });
   }
 
-  function setPreferredWorldTransform() {
-    if (!preferredScene) return;
-    preferredScene.world.setAttribute(
-      "transform",
-      `translate(${preferredView.x} ${preferredView.y}) scale(${preferredView.scale})`
-    );
-  }
-
-  function preferredClientToWorld(clientX, clientY) {
-    const rect = preferredSvg.getBoundingClientRect();
-    return {
-      x: (clientX - rect.left - preferredView.x) / preferredView.scale,
-      y: (clientY - rect.top - preferredView.y) / preferredView.scale,
-    };
-  }
-
-  function getVisiblePreferredBounds() {
-    if (!preferredScene || !preferredScene.nodeItems?.length) return null;
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    let count = 0;
-    for (const item of preferredScene.nodeItems) {
-      if (!item || !item.group || item.group.style.display === "none") continue;
-      const p = preferredNodePos.get(item.node.id);
-      if (!p) continue;
-      const sz = preferredNodeSize(item.node);
-      minX = Math.min(minX, p.x - sz.w / 2);
-      maxX = Math.max(maxX, p.x + sz.w / 2);
-      minY = Math.min(minY, p.y - sz.h / 2);
-      maxY = Math.max(maxY, p.y + sz.h / 2);
-      count += 1;
-    }
-    if (!count) return null;
-    return {
-      minX,
-      minY,
-      maxX,
-      maxY,
-      width: Math.max(1, maxX - minX),
-      height: Math.max(1, maxY - minY),
-    };
-  }
-
-  function autoFitPreferredViewport() {
-    if (!preferredSvg || !preferredScene) return;
-    const panel = preferredSvg.closest(".graph-panel");
-    if (!panel) return;
-    const bounds = getVisiblePreferredBounds();
-    if (!bounds) return;
-
-    const viewportW = Math.max(1, panel.clientWidth);
-    const viewportH = Math.max(1, panel.clientHeight);
-    const pad = 40;
-    const fitW = Math.max(1, viewportW - pad * 2);
-    const fitH = Math.max(1, viewportH - pad * 2);
-    const safeMargin = selectedLayerMode === "layer2" ? 120 : 72;
-    const fitScale = Math.min(
-      fitW / (bounds.width + safeMargin * 2),
-      fitH / (bounds.height + safeMargin * 2)
-    );
-    const minReadableScale = selectedLayerMode === "layer2" ? 0.78 : 0.65;
-    const nextScale = clamp(fitScale, minReadableScale, 3.2);
-
-    const cx = (bounds.minX + bounds.maxX) / 2;
-    const cy = (bounds.minY + bounds.maxY) / 2;
-    preferredView.scale = nextScale;
-    preferredView.x = viewportW / 2 - cx * nextScale;
-    preferredView.y = viewportH / 2 - cy * nextScale;
-    panel.scrollLeft = 0;
-    panel.scrollTop = 0;
-    const screenMinX = bounds.minX * preferredView.scale + preferredView.x - panel.scrollLeft;
-    const screenMaxX = bounds.maxX * preferredView.scale + preferredView.x - panel.scrollLeft;
-    const screenMinY = bounds.minY * preferredView.scale + preferredView.y - panel.scrollTop;
-    const screenMaxY = bounds.maxY * preferredView.scale + preferredView.y - panel.scrollTop;
-    const dx = viewportW / 2 - (screenMinX + screenMaxX) / 2;
-    const dy = viewportH / 2 - (screenMinY + screenMaxY) / 2;
-    preferredView.x += dx;
-    preferredView.y += dy;
-    setPreferredWorldTransform();
-  }
-
-
-  function getPreferredNodeMetric(node) {
-    const cached = node && node.id ? preferredNodeMetrics.get(node.id) : null;
-    if (cached) return cached;
-    const isClaim = node?.type === "claim";
-    const isLevel2 = !isClaim && Number(node?.level) === 2;
-    const minW = isClaim ? 280 : (isLevel2 ? 150 : 190);
-    const maxW = isClaim ? 520 : (isLevel2 ? 300 : 430);
-    const fontSize = isClaim ? 14 : (isLevel2 ? 12 : 13);
-    const fontWeight = isClaim ? 700 : 500;
-    const padX = isClaim ? 28 : (isLevel2 ? 18 : 22);
-    const padY = isClaim ? 16 : 14;
-    const lineHeight = isClaim ? 18 : (isLevel2 ? 15 : 16);
-    const maxTextW = maxW - padX * 2;
-    const lines = wrapTextWithMaxWidth(node?.label || "", maxTextW, fontSize, fontWeight, 3);
-    const widest = Math.max(...lines.map((l) => measureTextWidth(l, fontSize, fontWeight)), 0);
-    const w = clamp(widest + padX * 2, minW, maxW);
-    const h = Math.max(isClaim ? 72 : 58, lines.length * lineHeight + padY * 2);
-    const metric = { w, h, lines, fontSize, fontWeight, lineHeight };
-    if (node && node.id) preferredNodeMetrics.set(node.id, metric);
-    return metric;
-  }
-
-  function preferredNodeSize(node) {
-    return getPreferredNodeMetric(node);
-  }
-
-  function preferredTypeStyle(node) {
-    if (node.type === "claim") return { fill: "#d1d5db", stroke: "#4b5563" };
-    const side = resolveNodeSide(node);
-    if (side === "bad") return { fill: "#fecaca", stroke: "#b91c1c" };
-    return { fill: "#86efac", stroke: "#166534" };
-  }
-
-  function preferredEdgeAnchor(fromId, toId) {
-    const from = preferredNodePos.get(fromId);
-    const to = preferredNodePos.get(toId);
-    const fromNode = preferredNodeById.get(fromId);
-    const toNode = preferredNodeById.get(toId);
-    if (!from || !to || !fromNode || !toNode) return null;
-
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const ux = dx / len;
-    const uy = dy / len;
-
-    const fs = preferredNodeSize(fromNode);
-    const ts = preferredNodeSize(toNode);
-    const frx = fs.w / 2;
-    const fry = fs.h / 2;
-    const trx = ts.w / 2;
-    const try_ = ts.h / 2;
-
-    const fromDist = 1 / Math.sqrt((ux * ux) / (frx * frx) + (uy * uy) / (fry * fry));
-    const toDist = 1 / Math.sqrt((ux * ux) / (trx * trx) + (uy * uy) / (try_ * try_));
-
-    return {
-      sx: from.x + ux * fromDist,
-      sy: from.y + uy * fromDist,
-      tx: to.x - ux * toDist,
-      ty: to.y - uy * toDist,
-    };
-  }
-
-  function updatePreferredScene() {
-    if (!preferredScene) return;
-    for (const e of preferredScene.edgeItems) {
-      const p = preferredEdgeAnchor(e.edge.source, e.edge.target);
-      if (!p) continue;
-      if (e.edge.type === "attack") {
-        const mx = (p.sx + p.tx) / 2;
-        const my = (p.sy + p.ty) / 2 - 24;
-        e.path.setAttribute("d", `M ${p.sx} ${p.sy} Q ${mx} ${my} ${p.tx} ${p.ty}`);
-      } else {
-        e.path.setAttribute("d", `M ${p.sx} ${p.sy} L ${p.tx} ${p.ty}`);
-      }
-    }
-    for (const n of preferredScene.nodeItems) {
-      const p = preferredNodePos.get(n.node.id);
-      if (!p) continue;
-      n.group.setAttribute("transform", `translate(${p.x} ${p.y})`);
-    }
-  }
-
-  function attachPreferredNodeDrag(group, node) {
-    let dragging = false;
-    let offset = null;
-
-    function onMove(ev) {
-      if (!dragging) return;
-      const world = preferredClientToWorld(ev.clientX, ev.clientY);
-      const p = preferredNodePos.get(node.id);
-      const sz = preferredNodeSize(node);
-      p.x = clamp(world.x - offset.x, sz.w / 2, preferredCanvasWidth - sz.w / 2);
-      p.y = clamp(world.y - offset.y, sz.h / 2, preferredCanvasHeight - sz.h / 2);
-      updatePreferredScene();
-    }
-
-    function onUp() {
-      dragging = false;
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    }
-
-    group.addEventListener("pointerdown", (ev) => {
-      ev.stopPropagation();
-      const p = preferredNodePos.get(node.id);
-      const world = preferredClientToWorld(ev.clientX, ev.clientY);
-      offset = { x: world.x - p.x, y: world.y - p.y };
-      dragging = true;
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
-    });
-  }
-
-  function drawPreferredGraph(preferredResult, payload, warnings, countLookup, graphMeta) {
-    if (!preferredSvg) return;
-    preferredSvg.innerHTML = "";
-    preferredCanvasWidth = PREF_WIDTH;
-    preferredCanvasHeight = PREF_HEIGHT;
-    preferredSvg.setAttribute("viewBox", `0 0 ${preferredCanvasWidth} ${preferredCanvasHeight}`);
-    preferredSvg.setAttribute("width", String(preferredCanvasWidth));
-    preferredSvg.setAttribute("height", String(preferredCanvasHeight));
-
-    const defs = createSvgEl("defs", {});
-    const markerSupport = createSvgEl("marker", {
-      id: "arrow-pref-support",
-      markerWidth: 12,
-      markerHeight: 12,
-      refX: 10,
-      refY: 4,
-      orient: "auto",
-      markerUnits: "strokeWidth",
-    });
-    markerSupport.appendChild(createSvgEl("path", { d: "M0,0 L0,8 L10,4 z", fill: "#111827" }));
-    defs.appendChild(markerSupport);
-
-    const markerAttack = createSvgEl("marker", {
-      id: "arrow-pref-attack",
-      markerWidth: 12,
-      markerHeight: 12,
-      refX: 10,
-      refY: 4,
-      orient: "auto",
-      markerUnits: "strokeWidth",
-    });
-    markerAttack.appendChild(createSvgEl("path", { d: "M0,0 L0,8 L10,4 z", fill: "#dc2626" }));
-    defs.appendChild(markerAttack);
-    preferredSvg.appendChild(defs);
-
-    const world = createSvgEl("g", {});
-    preferredSvg.appendChild(world);
-
-    preferredNodePos.clear();
-    preferredNodeById.clear();
-    preferredNodeMetrics.clear();
-    preferredConnectedByNode.clear();
-
-    const exts = preferredResult?.extensions || [];
-    const derivedList = preferredResult?.derived || [];
-    const query = payload?.query ? String(payload.query) : "query";
-    const assumptions = (payload?.assumptions || []).map((x) => String(x));
-    const rules = payload?.rules || [];
-    const contraries = payload?.contraries || {};
-    const nodes = [];
-    const edges = [];
-    const clusters = [];
-    const nodeSet = new Set();
-    const rulePremiseToNodeIds = new Map();
-    const claimIds = [];
-
-    const claims = Array.from(
-      new Set(
-        rules
-          .map((r) => String(r?.conclusion || "").trim())
-          .filter(Boolean)
-      )
-    );
-    if (query && !claims.includes(query)) claims.unshift(query);
-    claims.forEach((claim, idx) => {
-      const clusterId = `claim_cluster_${idx + 1}_${claim}`;
-      const clusterSentiment = claim.startsWith("bad_") ? "bad" : "good";
-      clusters.push({ id: clusterId, label: `claim:${claim}` });
-      const claimNodeId = `${clusterId}::C::${claim}`;
-      claimIds.push(claimNodeId);
-      const claimDerivedInAll =
-        derivedList.length > 0 && derivedList.every((d) => Array.isArray(d) && d.includes(claim));
-      const claimDerivedInAny =
-        derivedList.length > 0 && derivedList.some((d) => Array.isArray(d) && d.includes(claim));
-      nodes.push({
-        id: claimNodeId,
-        clusterId,
-        type: "claim",
-        label: claim,
-        clusterSentiment,
-        satisfied: claimDerivedInAll ? true : (claimDerivedInAny ? null : false),
-        count: Number.isFinite(Number(countLookup?.get(`claim::${claim}`)))
-          ? Number(countLookup?.get(`claim::${claim}`))
-          : null,
-      });
-      nodeSet.add(claimNodeId);
-    });
-
-    function findClusterForClaim(claim) {
-      return clusters.find((c) => c.id.endsWith(`_${claim}`)) || null;
-    }
-
-    for (const r of rules) {
-      const conclusion = String(r?.conclusion || "").trim();
-      const premises = Array.isArray(r?.premises) ? r.premises : [];
-      if (!conclusion) continue;
-      const cl = findClusterForClaim(conclusion);
-      if (!cl) continue;
-      const clusterSentiment = conclusion.startsWith("bad_") ? "bad" : "good";
-      const claimNodeId = `${cl.id}::C::${conclusion}`;
-
-      for (const p of premises) {
-        const prem = String(p || "").trim();
-        if (!prem) continue;
-        const isAssumption = assumptions.includes(prem);
-        const nodeType = isAssumption ? "assumption" : "proposition";
-        const premiseNodeId = `${cl.id}::${isAssumption ? "A" : "P"}::${prem}`;
-        if (!nodeSet.has(premiseNodeId)) {
-          const premiseDbCount = Number(countLookup?.get(`${nodeType}::${prem}`));
-          nodes.push({
-            id: premiseNodeId,
-            clusterId: cl.id,
-            type: nodeType,
-            label: prem,
-            clusterSentiment,
-            count: Number.isFinite(premiseDbCount) && premiseDbCount > 0 ? premiseDbCount : null,
-          });
-          nodeSet.add(premiseNodeId);
-        }
-        edges.push({
-          id: `sup_${premiseNodeId}_${claimNodeId}`,
-          source: premiseNodeId,
-          target: claimNodeId,
-          type: "support",
-        });
-        if (!rulePremiseToNodeIds.has(prem)) rulePremiseToNodeIds.set(prem, []);
-        rulePremiseToNodeIds.get(prem).push(premiseNodeId);
-      }
-    }
-
-    const attackerPairs = [];
-    for (const a of assumptions) {
-      const direct = String(contraries[a] || "").trim();
-      if (direct) attackerPairs.push({ attacker: direct, target: a });
-    }
-    const localWarnings = Array.isArray(warnings) ? warnings.map((w) => String(w)) : [];
-    for (const w of localWarnings) {
-      const m = w.match(/assumption '([^']+)'.*\(([^,]+), ([^)]+)\)/);
-      if (!m) continue;
-      const target = String(m[1] || "").trim();
-      const attacker = String(m[3] || "").trim();
-      if (target && attacker) attackerPairs.push({ attacker, target });
-    }
-    const seenAttack = new Set();
-    for (const pair of attackerPairs) {
-      const attackers = rulePremiseToNodeIds.get(pair.attacker) || [];
-      const targets = [];
-      for (const n of nodes) {
-        if (n.type === "assumption" && n.label === pair.target) targets.push(n.id);
-      }
-      for (const src of attackers) {
-        for (const tgt of targets) {
-          const key = `${src}::${tgt}`;
-          if (seenAttack.has(key)) continue;
-          seenAttack.add(key);
-          edges.push({ id: `atk_${seenAttack.size}`, source: src, target: tgt, type: "attack" });
-        }
-      }
-    }
-
-    const extSet = new Set((exts[0] || []).map((x) => String(x)));
-    for (const n of nodes) {
-      if (n.type === "assumption" && extSet.has(n.label)) n.inPreferred = true;
-    }
-
-    const allowedClaimLabels = new Set(
-      [query, graphMeta?.claimA, graphMeta?.claimB, graphMeta?.claimC]
-        .filter(Boolean)
-        .map((x) => String(x))
-    );
-    const hiddenNodeIds = new Set(
-      nodes
-        .filter((n) => {
-          if (n.type !== "claim") return false;
-          if (!allowedClaimLabels.size) return false;
-          return !allowedClaimLabels.has(String(n.label || ""));
-        })
-        .map((n) => n.id)
-    );
-    if (hiddenNodeIds.size) {
-      for (let i = nodes.length - 1; i >= 0; i -= 1) {
-        if (hiddenNodeIds.has(nodes[i].id)) nodes.splice(i, 1);
-      }
-      for (let i = edges.length - 1; i >= 0; i -= 1) {
-        if (hiddenNodeIds.has(edges[i].source) || hiddenNodeIds.has(edges[i].target)) {
-          edges.splice(i, 1);
-        }
-      }
-    }
-    const nodeById = new Map(nodes.map((n) => [n.id, n]));
-    const claimNodes = nodes.filter((n) => n.type === "claim");
-    const supportIncoming = (claimId, type = null) =>
-      edges
-        .filter((e) => e.type === "support" && e.target === claimId)
-        .map((e) => nodeById.get(e.source))
-        .filter((n) => n && (!type || n.type === type));
-    const attackIncomingTo = (targetIds, type = null) =>
-      edges
-        .filter((e) => e.type === "attack" && targetIds.has(e.target))
-        .map((e) => nodeById.get(e.source))
-        .filter((n) => n && (!type || n.type === type));
-    const pickClaimNode = (label) =>
-      claimNodes.find((n) => String(n.label || "") === String(label || "")) || null;
-    function inferClaimFromAttackers(attackerNodes, excludedLabels) {
-      const attackerIds = new Set(attackerNodes.map((n) => n.id));
-      const excluded = new Set((excludedLabels || []).filter(Boolean).map((x) => String(x)));
-      const scores = [];
-      for (const c of claimNodes) {
-        const cl = String(c.label || "");
-        if (excluded.has(cl)) continue;
-        const supporters = supportIncoming(c.id, "proposition");
-        const hit = supporters.filter((n) => attackerIds.has(n.id)).length;
-        if (hit > 0) scores.push({ node: c, score: hit });
-      }
-      scores.sort((a, b) => b.score - a.score || String(a.node.label || "").localeCompare(String(b.node.label || "")));
-      return scores.length ? scores[0].node : null;
-    }
-
-    const claimAByMeta = pickClaimNode(graphMeta?.claimA);
-    const claimA =
-      claimAByMeta ||
-      pickClaimNode(query) ||
-      claimNodes[0] ||
-      null;
-
-    if (claimA) {
-      const claimBByMeta = pickClaimNode(graphMeta?.claimB);
-      const level0 = new Set([claimA.id]);
-      const level1NodesAll = supportIncoming(claimA.id);
-      const level1 = new Set(level1NodesAll.map((n) => n.id));
-      const level1Assumptions = new Set(level1NodesAll.filter((n) => n.type === "assumption").map((n) => n.id));
-
-      const level2AttackersAll = attackIncomingTo(level1Assumptions, "proposition");
-      const inferredClaimB = inferClaimFromAttackers(level2AttackersAll, [claimA.label]);
-      const claimB = claimBByMeta || inferredClaimB;
-      const level3 = new Set(claimB ? [claimB.id] : []);
-      const claimBPropositions = claimB ? new Set(supportIncoming(claimB.id, "proposition").map((n) => n.id)) : null;
-      const level2 = new Set(
-        level2AttackersAll
-          .filter((n) => !claimBPropositions || claimBPropositions.has(n.id))
-          .map((n) => n.id)
-      );
-      if (!level2.size) {
-        for (const n of level2AttackersAll) level2.add(n.id);
-      }
-
-      // Level 4-7 only: keep level 0-3 untouched.
-      const claimBAssumptionNodes = claimB ? supportIncoming(claimB.id, "assumption") : [];
-      const claimBAssumptionIds = new Set(claimBAssumptionNodes.map((n) => n.id));
-      const level4 = new Set();
-      const level4CloneIdsByBase = new Map();
-      const attackTargetsBySrc = new Map();
-      for (const e of edges) {
-        if (e.type !== "attack") continue;
-        if (!level2.has(e.source)) continue;
-        if (!claimBAssumptionIds.has(e.target)) continue;
-        if (!attackTargetsBySrc.has(e.source)) attackTargetsBySrc.set(e.source, []);
-        attackTargetsBySrc.get(e.source).push(e.target);
-      }
-      const fallbackAssumptionIds = claimBAssumptionNodes.map((n) => n.id);
-      let fallbackIdx = 0;
-      for (const srcId of level2) {
-        const srcNode = nodeById.get(srcId);
-        if (!srcNode) continue;
-        let targetBaseId = null;
-        const directTargets = attackTargetsBySrc.get(srcId) || [];
-        if (directTargets.length) {
-          targetBaseId = directTargets[0];
-        } else {
-          const attackerLabel = String(srcNode.label || "").trim();
-          const byContrary = claimBAssumptionNodes.find(
-            (a) => String((contraries && contraries[a.label]) || "").trim() === attackerLabel
-          );
-          if (byContrary) targetBaseId = byContrary.id;
-        }
-        if (!targetBaseId && fallbackAssumptionIds.length) {
-          targetBaseId = fallbackAssumptionIds[fallbackIdx % fallbackAssumptionIds.length];
-          fallbackIdx += 1;
-        }
-        if (!targetBaseId) continue;
-        const base = nodeById.get(targetBaseId);
-        if (!base) continue;
-        const cloneId = `${targetBaseId}::L4::${srcId}`;
-        if (!nodeById.has(cloneId)) {
-          const clone = { ...base, id: cloneId, isFocus: false };
-          nodes.push(clone);
-          nodeById.set(cloneId, clone);
-        }
-        level4.add(cloneId);
-        if (!level4CloneIdsByBase.has(targetBaseId)) level4CloneIdsByBase.set(targetBaseId, []);
-        level4CloneIdsByBase.get(targetBaseId).push(cloneId);
-        edges.push({
-          id: `sup_${cloneId}_${claimB.id}`,
-          source: cloneId,
-          target: claimB.id,
-          type: "support",
-        });
-      }
-
-      // Level 5 = only claimA propositions that attack assumptions.
-      const level5 = new Set();
-      const level5ByLabel = new Map();
-      const claimAPropsMeta = Array.isArray(graphMeta?.claimAPropositionsAll) ? graphMeta.claimAPropositionsAll : [];
-      const claimAPropsSource = claimAPropsMeta.length
-        ? claimAPropsMeta.map((r) => ({ label: String(r.proposition || "").trim(), count: Number(r.count) || null }))
-        : supportIncoming(claimA.id, "proposition").map((n) => ({ label: String(n.label || "").trim(), count: Number(n.count) || null }));
-      const claimAAssMeta = Array.isArray(graphMeta?.claimAAssumptionsAll) ? graphMeta.claimAAssumptionsAll : [];
-      const claimAAssSource = claimAAssMeta.length
-        ? claimAAssMeta.map((r) => ({ label: String(r.assumption || "").trim(), count: Number(r.count) || null }))
-        : supportIncoming(claimA.id, "assumption").map((n) => ({ label: String(n.label || "").trim(), count: Number(n.count) || null }));
-      const claimAPropLabelSet = new Set(claimAPropsSource.map((p) => p.label).filter(Boolean));
-      const claimAAssLabelSet = new Set(claimAAssSource.map((a) => a.label).filter(Boolean));
-      const pairedLevel5Labels = new Set();
-      const pairedLevel7Labels = new Set();
-      const pairLinks = [];
-      const level4BaseAssumptionIds = new Set(level4CloneIdsByBase.keys());
-      const level4AssumptionLabels = new Set(
-        [...level4BaseAssumptionIds]
-          .map((id) => String(nodeById.get(id)?.label || "").trim())
-          .filter(Boolean)
-      );
-      const claimALevel5PairsMeta = Array.isArray(graphMeta?.claimALevel5Pairs) ? graphMeta.claimALevel5Pairs : [];
-
-      // Level 5 strict: claimA proposition that attacks Level 4 assumptions.
-      for (const r of claimALevel5PairsMeta) {
-        const p = String(r?.proposition || "").trim();
-        const a = String(r?.assumption || "").trim();
-        if (!p || !a) continue;
-        if (!claimAPropLabelSet.has(p)) continue;
-        if (!level4AssumptionLabels.has(a)) continue;
-        pairedLevel5Labels.add(p);
-      }
-      if (!pairedLevel5Labels.size) {
-        for (const e of edges) {
-          if (e.type !== "attack") continue;
-          if (!level4BaseAssumptionIds.has(e.target)) continue;
-          const srcLabel = String(nodeById.get(e.source)?.label || "").trim();
-          if (!claimAPropLabelSet.has(srcLabel)) continue;
-          pairedLevel5Labels.add(srcLabel);
-        }
-        for (const aLabel of level4AssumptionLabels) {
-          const attacker = String((contraries && contraries[aLabel]) || "").trim();
-          if (!attacker || !claimAPropLabelSet.has(attacker)) continue;
-          pairedLevel5Labels.add(attacker);
-        }
-      }
-
-      // Level 7 pairing still follows claimA proposition-assumption pairs.
-      const attackPairsMeta = Array.isArray(graphMeta?.claimAAttackPairs) ? graphMeta.claimAAttackPairs : [];
-      for (const r of attackPairsMeta) {
-        const p = String(r?.proposition || "").trim();
-        const a = String(r?.assumption || "").trim();
-        if (!p || !a) continue;
-        if (!claimAPropLabelSet.has(p) || !claimAAssLabelSet.has(a)) continue;
-        pairedLevel7Labels.add(a);
-        pairLinks.push({ prop: p, ass: a });
-      }
-      for (const e of edges) {
-        if (e.type !== "attack") continue;
-        const srcLabel = String(nodeById.get(e.source)?.label || "").trim();
-        const tgtLabel = String(nodeById.get(e.target)?.label || "").trim();
-        if (!claimAPropLabelSet.has(srcLabel) || !claimAAssLabelSet.has(tgtLabel)) continue;
-        pairedLevel7Labels.add(tgtLabel);
-        pairLinks.push({ prop: srcLabel, ass: tgtLabel });
-      }
-      for (const a of claimAAssLabelSet) {
-        const attacker = String((contraries && contraries[a]) || "").trim();
-        if (!attacker || !claimAPropLabelSet.has(attacker)) continue;
-        pairedLevel7Labels.add(a);
-        pairLinks.push({ prop: attacker, ass: a });
-      }
-      const upperVisibleIdsForDedup = new Set([...level0, ...level1, ...level2, ...level3, ...level4]);
-      const upperLabelsForDedup = new Set(
-        [...upperVisibleIdsForDedup]
-          .map((id) => String(nodeById.get(id)?.label || "").trim())
-          .filter(Boolean)
-      );
-      for (const p of claimAPropsSource) {
-        if (!p.label) continue;
-        if (!pairedLevel5Labels.has(p.label)) continue;
-        if (upperLabelsForDedup.has(p.label)) continue;
-        const cloneId = `L5::${claimA.id}::${p.label}`;
-        if (!nodeById.has(cloneId)) {
-          const clone = {
-            id: cloneId,
-            clusterId: claimA.clusterId,
-            clusterSentiment: claimA.clusterSentiment,
-            type: "proposition",
-            label: p.label,
-            count: p.count,
-            isFocus: false,
-          };
-          nodes.push(clone);
-          nodeById.set(cloneId, clone);
-        }
-        level5.add(cloneId);
-        level5ByLabel.set(p.label, cloneId);
-      }
-      // Safety fallback: if dedup removed all Level 5 nodes, restore required pair labels.
-      if (!level5.size && pairedLevel5Labels.size) {
-        const propCountByLabel = new Map(
-          claimAPropsSource.map((p) => [String(p.label || "").trim(), Number(p.count) || null])
-        );
-        for (const label of pairedLevel5Labels) {
-          const cloneId = `L5::${claimA.id}::${label}`;
-          if (!nodeById.has(cloneId)) {
-            const clone = {
-              id: cloneId,
-              clusterId: claimA.clusterId,
-              clusterSentiment: claimA.clusterSentiment,
-              type: "proposition",
-              label,
-              count: propCountByLabel.get(label) || null,
-              isFocus: false,
-            };
-            nodes.push(clone);
-            nodeById.set(cloneId, clone);
-          }
-          level5.add(cloneId);
-          level5ByLabel.set(label, cloneId);
-        }
-      }
-      const level5Labels = new Set(level5ByLabel.keys());
-      const claimAAssLabelsOrdered = claimAAssSource
-        .map((a) => String(a.label || "").trim())
-        .filter(Boolean);
-      const claimAAssLabelSet2 = new Set(claimAAssLabelsOrdered);
-      const assCountByLabel = new Map(claimAAssSource.map((a) => [String(a.label || "").trim(), Number(a.count) || 0]));
-      const metaPairsByProp = new Map();
-      for (const r of attackPairsMeta) {
-        const p = String(r?.proposition || "").trim();
-        const a = String(r?.assumption || "").trim();
-        if (!p || !a) continue;
-        if (!claimAAssLabelSet2.has(a)) continue;
-        if (!metaPairsByProp.has(p)) metaPairsByProp.set(p, []);
-        metaPairsByProp.get(p).push(a);
-      }
-      const pairByProp = new Map();
-      let fallbackIdxAss = 0;
-      for (const prop of level5Labels) {
-        const candidates = [];
-        const fromMeta = metaPairsByProp.get(prop) || [];
-        for (const a of fromMeta) candidates.push(a);
-        for (const a of claimAAssLabelSet2) {
-          const attacker = String((contraries && contraries[a]) || "").trim();
-          if (attacker === prop) candidates.push(a);
-        }
-        const uniq = [...new Set(candidates.filter((a) => claimAAssLabelSet2.has(a)))];
-        let picked = null;
-        if (uniq.length) {
-          picked = uniq[0];
-          for (const a of uniq.slice(1)) {
-            const pa = Number(assCountByLabel.get(picked) || 0);
-            const ca = Number(assCountByLabel.get(a) || 0);
-            if (ca > pa || (ca === pa && String(a).localeCompare(String(picked)) < 0)) picked = a;
-          }
-        } else if (claimAAssLabelsOrdered.length) {
-          picked = claimAAssLabelsOrdered[fallbackIdxAss % claimAAssLabelsOrdered.length];
-          fallbackIdxAss += 1;
-        }
-        if (picked) pairByProp.set(prop, picked);
-      }
-      const finalPairLinks = [];
-      pairedLevel7Labels.clear();
-      for (const [prop, ass] of pairByProp.entries()) {
-        finalPairLinks.push({ prop, ass });
-        pairedLevel7Labels.add(ass);
-      }
-
-      // Level 6 = claimA clone.
-      const claimACloneId = `${claimA.id}::L6`;
-      if (!nodeById.has(claimACloneId)) {
-        const claimAClone = { ...claimA, id: claimACloneId, isFocus: false };
-        nodes.push(claimAClone);
-        nodeById.set(claimACloneId, claimAClone);
-      }
-      const level6 = new Set([claimACloneId]);
-
-      // Level 7 = assumptions mapped from Level 5 propositions.
-      const level7 = new Set();
-      const assCountByLabelForL7 = new Map(
-        claimAAssSource.map((a) => [String(a.label || "").trim(), Number(a.count) || null])
-      );
-      const finalPairByProp = new Map(
-        finalPairLinks.map((x) => [String(x.prop || "").trim(), String(x.ass || "").trim()])
-      );
-      for (const [propLabel] of level5ByLabel.entries()) {
-        const strictMeta = [...new Set((metaPairsByProp.get(propLabel) || []).filter((a) => claimAAssLabelSet2.has(a)))];
-        let assLabel = null;
-        if (strictMeta.length) {
-          const sorted = strictMeta.sort((a, b) => {
-            const ca = Number(assCountByLabelForL7.get(a) || 0);
-            const cb = Number(assCountByLabelForL7.get(b) || 0);
-            if (cb !== ca) return cb - ca;
-            return String(a).localeCompare(String(b));
-          });
-          assLabel = sorted[0];
-        } else {
-          const fp = String(finalPairByProp.get(propLabel) || "").trim();
-          assLabel = fp && claimAAssLabelSet2.has(fp) ? fp : null;
-        }
-        if (!assLabel) {
-          const byContrary = [];
-          for (const a of claimAAssLabelSet2) {
-            const attacker = String((contraries && contraries[a]) || "").trim();
-            if (attacker === propLabel) byContrary.push(a);
-          }
-          if (byContrary.length) {
-            const sorted = [...new Set(byContrary)].sort((a, b) => {
-              const ca = Number(assCountByLabelForL7.get(a) || 0);
-              const cb = Number(assCountByLabelForL7.get(b) || 0);
-              if (cb !== ca) return cb - ca;
-              return String(a).localeCompare(String(b));
-            });
-            assLabel = sorted[0];
-          }
-        }
-        if (!assLabel) continue;
-        const cloneId = `L7::${claimA.id}::${assLabel}::from::${propLabel}`;
-        if (!nodeById.has(cloneId)) {
-          const clone = {
-            id: cloneId,
-            clusterId: claimA.clusterId,
-            clusterSentiment: claimA.clusterSentiment,
-            type: "assumption",
-            label: assLabel,
-            count: Number(assCountByLabelForL7.get(assLabel)) || null,
-            isFocus: false,
-          };
-          nodes.push(clone);
-          nodeById.set(cloneId, clone);
-        }
-        level7.add(cloneId);
-      }
-
-      // Connect level 5/7 clones to level 6 clone via support.
-      for (const pId of level5) {
-        edges.push({
-          id: `sup_${pId}_${claimACloneId}`,
-          source: pId,
-          target: claimACloneId,
-          type: "support",
-        });
-      }
-      for (const aId of level7) {
-        edges.push({
-          id: `sup_${aId}_${claimACloneId}`,
-          source: aId,
-          target: claimACloneId,
-          type: "support",
-        });
-      }
-
-      // Mirror attack edges from original claimA propositions to level 5 clones, targeting level4 clone pairs.
-      const attackEdgeKey = new Set(edges.map((e) => `${e.type}::${e.source}::${e.target}`));
-      const pushAttackEdgeUnique = (source, target, idPrefix = "atk") => {
-        if (!source || !target) return;
-        const key = `attack::${source}::${target}`;
-        if (attackEdgeKey.has(key)) return;
-        attackEdgeKey.add(key);
-        edges.push({
-          id: `${idPrefix}_${source}_${target}`,
-          source,
-          target,
-          type: "attack",
-        });
-      };
-
-      for (const e of edges.slice()) {
-        if (e.type !== "attack") continue;
-        const srcLabel = String(nodeById.get(e.source)?.label || "");
-        const cloneSrc = level5ByLabel.get(srcLabel);
-        if (!cloneSrc) continue;
-        const cloneTargets = level4CloneIdsByBase.get(e.target) || [];
-        for (const t of cloneTargets) {
-          pushAttackEdgeUnique(cloneSrc, t, "atk");
-        }
-      }
-
-      // Ensure Level 5 attack edges are complete from SQL-derived pairs (ABA.sql),
-      // not only from currently rendered raw attack edges.
-      const level4CloneIdsByLabel = new Map();
-      for (const [baseId, cloneIds] of level4CloneIdsByBase.entries()) {
-        const label = String(nodeById.get(baseId)?.label || "").trim();
-        if (!label) continue;
-        if (!level4CloneIdsByLabel.has(label)) level4CloneIdsByLabel.set(label, []);
-        level4CloneIdsByLabel.get(label).push(...cloneIds);
-      }
-      for (const pair of claimALevel5PairsMeta) {
-        const prop = String(pair?.proposition || "").trim();
-        const ass = String(pair?.assumption || "").trim();
-        if (!prop || !ass) continue;
-        const cloneSrc = level5ByLabel.get(prop);
-        if (!cloneSrc) continue;
-        const cloneTargets = level4CloneIdsByLabel.get(ass) || [];
-        for (const t of cloneTargets) {
-          pushAttackEdgeUnique(cloneSrc, t, "atkmeta");
-        }
-      }
-
-      const levelToIds = new Map([
-        [0, level0],
-        [1, level1],
-        [2, level2],
-        [3, level3],
-        [4, level4],
-        [5, level5],
-        [6, level6],
-        [7, level7],
-      ]);
-      const maxVisibleLevel = getMaxVisibleLevel();
-      const visibleIds = new Set();
-      for (const [lv, ids] of levelToIds.entries()) {
-        if (lv > maxVisibleLevel) continue;
-        for (const id of ids) visibleIds.add(id);
-      }
-      for (let i = nodes.length - 1; i >= 0; i -= 1) {
-        if (!visibleIds.has(nodes[i].id)) nodes.splice(i, 1);
-      }
-      for (let i = edges.length - 1; i >= 0; i -= 1) {
-        const e = edges[i];
-        if (!visibleIds.has(e.source) || !visibleIds.has(e.target)) {
-          edges.splice(i, 1);
-          continue;
-        }
-        const keepSupportA = e.type === "support" && level1.has(e.source) && level0.has(e.target);
-        const keepAttackAB = e.type === "attack" && level2.has(e.source) && level1Assumptions.has(e.target);
-        const keepSupportB = e.type === "support" && (level2.has(e.source) || level4.has(e.source)) && level3.has(e.target);
-        const keepAttackBC = e.type === "attack" && level5.has(e.source) && level4.has(e.target);
-        const keepSupportC = e.type === "support" && (level5.has(e.source) || level7.has(e.source)) && level6.has(e.target);
-        if (!keepSupportA && !keepAttackAB && !keepSupportB && !keepAttackBC && !keepSupportC) {
-          edges.splice(i, 1);
-        }
-      }
-
-      for (const n of nodes) {
-        if (level0.has(n.id)) n.level = 0;
-        else if (level1.has(n.id)) n.level = 1;
-        else if (level2.has(n.id)) n.level = 2;
-        else if (level3.has(n.id)) n.level = 3;
-        else if (level4.has(n.id)) n.level = 4;
-        else if (level5.has(n.id)) n.level = 5;
-        else if (level6.has(n.id)) n.level = 6;
-        else if (level7.has(n.id)) n.level = 7;
-      }
-
-      const sortLevelNodes = (setIds) =>
-        nodes
-          .filter((n) => setIds.has(n.id))
-          .sort((a, b) => {
-            const ta = a.type === "claim" ? 0 : (a.type === "proposition" ? 1 : 2);
-            const tb = b.type === "claim" ? 0 : (b.type === "proposition" ? 1 : 2);
-            if (ta !== tb) return ta - tb;
-            return String(a.label || "").localeCompare(String(b.label || ""));
-          });
-
-      const levelNodes = new Map([
-        [0, sortLevelNodes(level0)],
-        [1, sortLevelNodes(level1)],
-        [2, sortLevelNodes(level2)],
-        [3, sortLevelNodes(level3)],
-        [4, sortLevelNodes(level4)],
-        [5, sortLevelNodes(level5)],
-        [6, sortLevelNodes(level6)],
-        [7, sortLevelNodes(level7)],
-      ]);
-
-      const rowGap = 26;
-      const subRowGapY = 22;
-      const marginX = 44;
-      const topPad = 42;
-      const levelGap = 72;
-      const defaultMaxNodesPerSubRow = 10;
-
-      const rowWidth = (rowNodes) =>
-        rowNodes.reduce((sum, n, idx) => {
-          const sz = preferredNodeSize(n);
-          return sum + sz.w + (idx > 0 ? rowGap : 0);
-        }, 0);
-      const rowHeight = (rowNodes, fallback) =>
-        rowNodes.length ? Math.max(...rowNodes.map((n) => preferredNodeSize(n).h)) : fallback;
-      const splitLevelRows = (rowNodes, level) => {
-        const maxNodesPerSubRow =
-          level === 5 || level === 7
-            ? 14
-            : defaultMaxNodesPerSubRow;
-        if (!rowNodes || !rowNodes.length) return [];
-        if (rowNodes.length <= maxNodesPerSubRow) return [rowNodes];
-        const out = [];
-        for (let i = 0; i < rowNodes.length; i += maxNodesPerSubRow) {
-          out.push(rowNodes.slice(i, i + maxNodesPerSubRow));
-        }
-        return out;
-      };
-
-      const activeLevels = [...levelNodes.entries()].filter(([, arr]) => arr.length).map(([lv]) => lv);
-      const levelRows = new Map();
-      for (const lv of activeLevels) levelRows.set(lv, splitLevelRows(levelNodes.get(lv), lv));
-      const widest = activeLevels.length
-        ? Math.max(...activeLevels.map((lv) => {
-          const rows = levelRows.get(lv) || [];
-          return rows.length ? Math.max(...rows.map((r) => rowWidth(r))) : 0;
-        }))
-        : PREF_WIDTH - marginX * 2;
-      preferredCanvasWidth = clamp(Math.ceil(widest * 1.15 + marginX * 2), PREF_WIDTH, 4600);
-
-      const levelHeights = new Map();
-      for (const lv of activeLevels) {
-        const rows = levelRows.get(lv) || [];
-        const totalH = rows.reduce((sum, r, idx) => sum + rowHeight(r, 58) + (idx > 0 ? subRowGapY : 0), 0);
-        levelHeights.set(lv, totalH || 58);
-      }
-      let cursorY = topPad;
-      for (const lv of activeLevels) {
-        const h = levelHeights.get(lv) || 58;
-        cursorY += h + levelGap;
-      }
-      preferredCanvasHeight = clamp(Math.ceil(cursorY + 56), PREF_HEIGHT, 3200);
-      preferredSvg.setAttribute("viewBox", `0 0 ${preferredCanvasWidth} ${preferredCanvasHeight}`);
-      preferredSvg.setAttribute("width", String(preferredCanvasWidth));
-      preferredSvg.setAttribute("height", String(preferredCanvasHeight));
-
-      function putNode(id, x, y) {
-        preferredNodePos.set(id, { x, y });
-      }
-      function placeRow(rowNodes, y) {
-        if (!rowNodes.length) return;
-        const total = rowWidth(rowNodes);
-        let cursor = (preferredCanvasWidth - total) / 2;
-        for (const n of rowNodes) {
-          const sz = preferredNodeSize(n);
-          cursor += sz.w / 2;
-          putNode(n.id, cursor, y);
-          cursor += sz.w / 2 + rowGap;
-        }
-      }
-
-      let y = topPad;
-      for (const lv of activeLevels) {
-        const rows = levelRows.get(lv) || [];
-        const h = levelHeights.get(lv) || 58;
-        let rowY = y;
-        rows.forEach((r, idx) => {
-          const rh = rowHeight(r, 58);
-          const centerY = rowY + rh / 2;
-          // staircase: alternate left/right offset for wrapped sub-rows.
-          if (idx > 0) {
-            const total = rowWidth(r);
-            const baseShift = Math.min(140, Math.max(36, preferredCanvasWidth * 0.035));
-            const dir = idx % 2 === 1 ? 1 : -1;
-            let cursor = (preferredCanvasWidth - total) / 2 + baseShift * dir;
-            for (const n of r) {
-              const sz = preferredNodeSize(n);
-              cursor += sz.w / 2;
-              putNode(n.id, cursor, centerY);
-              cursor += sz.w / 2 + rowGap;
-            }
-          } else {
-            placeRow(r, centerY);
-          }
-          rowY += rh + subRowGapY;
-        });
-        y += h + levelGap;
-      }
-    } else {
-      preferredCanvasWidth = PREF_WIDTH;
-      preferredCanvasHeight = PREF_HEIGHT;
-      preferredSvg.setAttribute("viewBox", `0 0 ${preferredCanvasWidth} ${preferredCanvasHeight}`);
-      preferredSvg.setAttribute("width", String(preferredCanvasWidth));
-      preferredSvg.setAttribute("height", String(preferredCanvasHeight));
-    }
-
-    for (const n of nodes) preferredNodeById.set(n.id, n);
-    for (const n of nodes) preferredNodeMetrics.set(n.id, getPreferredNodeMetric(n));
-    for (const e of edges) {
-      if (!preferredConnectedByNode.has(e.source)) preferredConnectedByNode.set(e.source, new Set());
-      if (!preferredConnectedByNode.has(e.target)) preferredConnectedByNode.set(e.target, new Set());
-      preferredConnectedByNode.get(e.source).add(e.id);
-      preferredConnectedByNode.get(e.target).add(e.id);
-    }
-    const preferredDegreeByNode = new Map();
-    for (const n of nodes) {
-      preferredDegreeByNode.set(n.id, (preferredConnectedByNode.get(n.id) || new Set()).size);
-    }
-
-    // Cluster frames/labels intentionally hidden per UI request.
-
-    const edgeLayer = createSvgEl("g", {});
-    const nodeLayer = createSvgEl("g", {});
-    world.appendChild(edgeLayer);
-    world.appendChild(nodeLayer);
-
-    const edgeItems = [];
-    for (const e of edges) {
-      const isAttack = e.type === "attack";
-      const isDenseSupportToClone =
-        !isAttack &&
-        String(e.target || "").endsWith("::L6") &&
-        (String(e.source || "").includes("::L5") || String(e.source || "").includes("::L7") || String(e.source || "").includes("L5::") || String(e.source || "").includes("L7::"));
-      const baseStrokeWidth = isAttack ? "2.3" : (isDenseSupportToClone ? "1.2" : "1.8");
-      const baseStrokeOpacity = isAttack ? "0.82" : (isDenseSupportToClone ? "0.22" : "0.55");
-      const path = createSvgEl("path", {
-        d: "M0 0 L0 0",
-        fill: "none",
-        stroke: isAttack ? "#dc2626" : "#111827",
-        "stroke-width": baseStrokeWidth,
-        "stroke-dasharray": "none",
-        "stroke-opacity": baseStrokeOpacity,
-        "marker-end": isAttack ? "url(#arrow-pref-attack)" : (isDenseSupportToClone ? "" : "url(#arrow-pref-support)"),
-      });
-      edgeLayer.appendChild(path);
-      edgeItems.push({ edge: e, path, baseStrokeWidth, baseStrokeOpacity });
-    }
-
-    const attackIncomingByTarget = new Map();
-    const attackerCandidateIds = new Set();
-    for (const e of edges) {
-      if (e.type !== "attack") continue;
-      attackerCandidateIds.add(e.source);
-      if (!attackIncomingByTarget.has(e.target)) attackIncomingByTarget.set(e.target, new Set());
-      attackIncomingByTarget.get(e.target).add(e.source);
-    }
-    const collapsedAttackTargetIds = new Set();
-
-    const nodeItems = [];
-    const nodeItemById = new Map();
-    for (const n of nodes) {
-      const p = preferredNodePos.get(n.id);
-      if (!p) continue;
-      const st = preferredTypeStyle(n);
-      const sz = preferredNodeSize(n);
-      const isAttackExpandableTarget = attackIncomingByTarget.has(n.id);
-      const g = createSvgEl("g", {
-        transform: `translate(${p.x} ${p.y})`,
-        style: `cursor: ${isAttackExpandableTarget ? "pointer" : "grab"};`,
-      });
-      const ellipse = createSvgEl("ellipse", {
-        cx: 0,
-        cy: 0,
-        rx: sz.w / 2,
-        ry: sz.h / 2,
-        fill: st.fill,
-        stroke: st.stroke,
-        "stroke-width": n.type === "claim" ? 4.6 : (n.inPreferred ? 4 : 2),
-        "stroke-dasharray": n.type === "assumption" ? "8 5" : "none",
-      });
-      const text = createSvgEl("text", {
-        fill: "#0f172a",
-      });
-      applyNodeLabel(text, preferredNodeSize(n), "#0f172a");
-      g.appendChild(ellipse);
-      g.appendChild(text);
-      const displayCount = resolveNodeDisplayCount(n, preferredDegreeByNode);
-      appendCountBadge(g, sz, displayCount);
-      const titleEl = createSvgEl("title", {});
-      const baseTitle = displayCount != null ? `${String(n.label || "")} (count=${displayCount})` : String(n.label || "");
-      titleEl.textContent = isAttackExpandableTarget ? `${baseTitle}\nClick: toggle attackers` : baseTitle;
-      g.appendChild(titleEl);
-
-      g.addEventListener("mouseenter", () => {
-        const connected = preferredConnectedByNode.get(n.id) || new Set();
-        for (const ei of edgeItems) {
-          if (ei.path.style.display === "none") continue;
-          const on = connected.has(ei.edge.id);
-          ei.path.setAttribute("stroke-opacity", on ? "1" : "0.12");
-        }
-      });
-      g.addEventListener("mouseleave", () => {
-        for (const ei of edgeItems) {
-          if (ei.path.style.display === "none") continue;
-          ei.path.setAttribute("stroke-opacity", ei.baseStrokeOpacity);
-          ei.path.setAttribute("stroke-width", ei.baseStrokeWidth);
-        }
-      });
-      if (isAttackExpandableTarget) {
-        g.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          if (collapsedAttackTargetIds.has(n.id)) collapsedAttackTargetIds.delete(n.id);
-          else collapsedAttackTargetIds.add(n.id);
-          applyAttackFocusVisibility();
-        });
-      }
-      if (!LOCK_AUTO_LAYOUT) attachPreferredNodeDrag(g, n);
-      nodeLayer.appendChild(g);
-      const item = { node: n, group: g, ellipse };
-      nodeItems.push(item);
-      nodeItemById.set(n.id, item);
-    }
-
-    function applyAttackFocusVisibility() {
-      const hiddenAttackEdgeKeys = new Set();
-      for (const targetId of collapsedAttackTargetIds) {
-        const attackers = attackIncomingByTarget.get(targetId) || new Set();
-        for (const attackerId of attackers) {
-          hiddenAttackEdgeKeys.add(`attack::${attackerId}::${targetId}`);
-        }
-      }
-
-      const attackerHasVisibleAttack = new Map();
-      for (const e of edges) {
-        if (e.type !== "attack") continue;
-        const key = `attack::${e.source}::${e.target}`;
-        const isVisible = !hiddenAttackEdgeKeys.has(key);
-        if (isVisible) attackerHasVisibleAttack.set(e.source, true);
-      }
-
-      for (const item of nodeItems) {
-        const id = item.node.id;
-        const shouldShow = !attackerCandidateIds.has(id) || !!attackerHasVisibleAttack.get(id);
-        item.group.style.display = shouldShow ? "" : "none";
-
-        const baseStroke =
-          item.node.type === "claim"
-            ? 4.6
-            : (item.node.inPreferred ? 4 : 2);
-        const isCollapsedTarget = collapsedAttackTargetIds.has(id);
-        item.ellipse.setAttribute("stroke-width", isCollapsedTarget ? String(baseStroke) : "5");
-      }
-
-      for (const ei of edgeItems) {
-        const srcItem = nodeItemById.get(ei.edge.source);
-        const tgtItem = nodeItemById.get(ei.edge.target);
-        const srcVisible = !!srcItem && srcItem.group.style.display !== "none";
-        const tgtVisible = !!tgtItem && tgtItem.group.style.display !== "none";
-        let showEdge = srcVisible && tgtVisible;
-        if (showEdge && ei.edge.type === "attack") {
-          const edgeKey = `attack::${ei.edge.source}::${ei.edge.target}`;
-          showEdge = !hiddenAttackEdgeKeys.has(edgeKey);
-        }
-        ei.path.style.display = showEdge ? "" : "none";
-        if (showEdge) {
-          ei.path.setAttribute("stroke-opacity", ei.baseStrokeOpacity);
-          ei.path.setAttribute("stroke-width", ei.baseStrokeWidth);
-        }
-      }
-    }
-
-    applyAttackFocusVisibility();
-
-    preferredScene = { world, edgeItems, nodeItems };
-    setPreferredWorldTransform();
-    updatePreferredScene();
-    requestAnimationFrame(() => {
-      autoFitPreferredViewport();
-    });
-  }
-
-  function attachPreferredPanZoom() {
-    if (!preferredSvg) return;
-    let panning = false;
-    let panStart = null;
-
-    preferredSvg.addEventListener("wheel", (ev) => {
-      ev.preventDefault();
-      const worldBefore = preferredClientToWorld(ev.clientX, ev.clientY);
-      const delta = ev.deltaY < 0 ? 1.08 : 0.92;
-      preferredView.scale = clamp(preferredView.scale * delta, 0.35, 3.2);
-      const rect = preferredSvg.getBoundingClientRect();
-      preferredView.x = ev.clientX - rect.left - worldBefore.x * preferredView.scale;
-      preferredView.y = ev.clientY - rect.top - worldBefore.y * preferredView.scale;
-      setPreferredWorldTransform();
-    }, { passive: false });
-
-    preferredSvg.addEventListener("pointerdown", (ev) => {
-      if (ev.button !== 0) return;
-      if (ev.target !== preferredSvg) return;
-      panning = true;
-      panStart = {
-        x: ev.clientX,
-        y: ev.clientY,
-        vx: preferredView.x,
-        vy: preferredView.y,
-      };
-      preferredSvg.style.cursor = "grabbing";
-      preferredSvg.setPointerCapture?.(ev.pointerId);
-    });
-
-    preferredSvg.addEventListener("pointermove", (ev) => {
-      if (!panning || !panStart) return;
-      preferredView.x = panStart.vx + (ev.clientX - panStart.x);
-      preferredView.y = panStart.vy + (ev.clientY - panStart.y);
-      setPreferredWorldTransform();
-    });
-
-    function stopPan(ev) {
-      if (!panning) return;
-      panning = false;
-      panStart = null;
-      preferredSvg.style.cursor = "";
-      if (ev?.pointerId != null) preferredSvg.releasePointerCapture?.(ev.pointerId);
-    }
-
-    preferredSvg.addEventListener("pointerup", stopPan);
-    preferredSvg.addEventListener("pointercancel", stopPan);
-    preferredSvg.addEventListener("dblclick", () => {
-      autoFitPreferredViewport();
-    });
-
-    window.addEventListener("resize", () => {
-      requestAnimationFrame(() => {
-        autoFitPreferredViewport();
-      });
-    });
-  }
-
-  function buildPreferredPayload(rawGraph) {
-    const nodes = (rawGraph.nodes || []).map((n) => n.data);
-    const edges = (rawGraph.edges || []).map((e) => e.data);
-    const idToNode = new Map(nodes.map((n) => [n.id, n]));
-
-    const assumptions = new Set();
-    const language = new Set();
-    const contraries = {};
-    const rules = [];
-    const warnings = [];
-    let ruleIdx = 1;
-
-    for (const n of nodes) {
-      const label = String(n.label || "").trim();
-      if (!label) continue;
-      language.add(label);
-      if (n.type === "assumption") assumptions.add(label);
-    }
-
-    for (const e of edges) {
-      if (e.type !== "support") continue;
-      const src = idToNode.get(e.source);
-      const tgt = idToNode.get(e.target);
-      if (!src || !tgt) continue;
-      const premise = String(src.label || "").trim();
-      const conclusion = String(tgt.label || "").trim();
-      if (!premise || !conclusion || premise === conclusion) continue;
-      language.add(premise);
-      language.add(conclusion);
-      rules.push({
-        name: `GraphRule${ruleIdx++}`,
-        premises: [premise],
-        conclusion,
-      });
-    }
-
-    for (const e of edges) {
-      if (e.type !== "attack") continue;
-      const src = idToNode.get(e.source);
-      const tgt = idToNode.get(e.target);
-      if (!src || !tgt || tgt.type !== "assumption") continue;
-      const attacker = String(src.label || "").trim();
-      const targetAssumption = String(tgt.label || "").trim();
-      if (!attacker || !targetAssumption) continue;
-      language.add(attacker);
-      if (!contraries[targetAssumption]) {
-        contraries[targetAssumption] = attacker;
-      } else if (contraries[targetAssumption] !== attacker) {
-        warnings.push(
-          `assumption '${targetAssumption}' has multiple attackers (${contraries[targetAssumption]}, ${attacker}); using first only`
-        );
-      }
-    }
-
-    for (const a of assumptions) {
-      if (!contraries[a]) {
-        contraries[a] = `not_${a}`;
-        language.add(contraries[a]);
-        warnings.push(`assumption '${a}' had no attacker; added synthetic contrary '${contraries[a]}'`);
-      }
-    }
-
-    return {
-      payload: {
-        language: Array.from(language),
-        assumptions: Array.from(assumptions),
-        contraries,
-        rules,
-        semantics_specification: selectedSemantics,
-        strategy_specification: selectedStrategy,
-        query: rawGraph?.meta?.claimA || null,
-      },
-      warnings,
-    };
-  }
-
-  function buildDbCountLookup(rawGraph) {
-    const lookup = new Map();
-    const nodes = (rawGraph?.nodes || []).map((n) => n?.data || n).filter(Boolean);
-    for (const n of nodes) {
-      const label = String(n?.label || "").trim();
-      const type = String(n?.type || "").trim();
-      const count = Number(n?.count);
-      if (!label || !type) continue;
-      if (!Number.isFinite(count) || count <= 0) continue;
-      const key = `${type}::${label}`;
-      const prev = Number(lookup.get(key) || 0);
-      if (count > prev) lookup.set(key, count);
-    }
-    return lookup;
-  }
-
   async function loadPreferred(rawGraph) {
     if (!preferredMetaEl || !preferredOutputEl) return;
-    const dbCountLookup = buildDbCountLookup(rawGraph);
-    const graphMeta = rawGraph?.meta || {};
+    const basePayload = rawGraph?.framework?.payload || rawGraph?.meta?.pyargPayload || null;
+    const warnings = Array.isArray(rawGraph?.framework?.warnings)
+      ? rawGraph.framework.warnings
+      : (Array.isArray(rawGraph?.meta?.pyargWarnings) ? rawGraph.meta.pyargWarnings : []);
+    const requestId = ++preferredRequestSeq;
+    llmRequestSeq += 1;
 
-    const built = buildPreferredPayload(rawGraph);
-    const payload = built.payload;
-    payload.semantics_specification = selectedSemantics;
-    payload.strategy_specification = selectedStrategy;
+    if (!basePayload) {
+      preferredMetaEl.textContent = "No backend framework payload was returned.";
+      preferredOutputEl.textContent = JSON.stringify(rawGraph || {}, null, 2);
+      setPayloadJsonOutput("-");
+      renderFilterResults({ extensions: [] });
+      setNaturalLanguageOutput("-", "");
+      setAcceptedNaturalLanguageOutput("-", "");
+      setGraphSummaryOutput("-", "");
+      return;
+    }
+
+    const payload = {
+      ...basePayload,
+      semantics_specification: selectedSemantics,
+      strategy_specification: selectedStrategy,
+    };
+    lastSemanticsPayload = payload;
+    setPayloadJsonOutput(JSON.stringify(payload, null, 2));
+    const cacheKey = buildSemanticsCacheKey(payload);
 
     if (!payload.rules.length) {
       preferredMetaEl.textContent = `Not enough graph data to compute ${selectedSemantics} extensions.`;
       preferredOutputEl.textContent = JSON.stringify({ assumptions: payload.assumptions.length, rules: payload.rules.length }, null, 2);
       renderFilterResults({ extensions: [] });
-      await translateExtensionsToNaturalLanguage({ extensions: [], accepted_assumptions: [] });
+      setNaturalLanguageOutput("-", "");
+      setAcceptedNaturalLanguageOutput("-", "");
+      setGraphSummaryOutput("-", "");
       return;
     }
 
-    preferredMetaEl.textContent =
-      `Running PyArg (${selectedSemantics}) with assumptions=${payload.assumptions.length}, rules=${payload.rules.length}, query=${payload.query || "-"}`;
-    try {
-      const resp = await apiFetch("/api/pyarg/evaluate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        // Fallback: keep graph visible even if API returns an error.
-        drawPreferredGraph({ extensions: [[]], derived: [[]], count: 0 }, payload, built.warnings, dbCountLookup, graphMeta);
-        preferredMetaEl.textContent = data.error || `Failed to compute ${selectedSemantics} extensions.`;
-        preferredOutputEl.textContent = JSON.stringify({ payload, warnings: built.warnings }, null, 2);
-        renderFilterResults({ extensions: [] });
-        await translateExtensionsToNaturalLanguage({ extensions: [], accepted_assumptions: [] });
+    if (semanticsResultCache.has(cacheKey)) {
+      const cached = semanticsResultCache.get(cacheKey);
+      if (cached?.error) {
+        // Do not reuse stale semantics failures; retry evaluation on every request.
+        semanticsResultCache.delete(cacheKey);
+      }
+      if (cached?.rawEvaluation) {
+        lastSemanticsResult = cached.rawEvaluation;
+        preferredMetaEl.textContent = `${cached.display.summary} (cached)`;
+        preferredOutputEl.textContent = JSON.stringify({
+          summary: cached.display.summary,
+          result: cached.rawEvaluation,
+          payload,
+          warnings,
+          cached: true,
+        }, null, 2);
+        renderCachedSemanticsDisplay(cached.display);
+        await explainFormalSemantics(cached.rawEvaluation);
         return;
       }
-
-      preferredMetaEl.textContent =
-        `${selectedSemantics}_extensions=${data.count ?? 0}, strategy=${selectedStrategy}, credulous=${data.credulous ?? "-"}, skeptical=${data.skeptical ?? "-"}`;
-      drawPreferredGraph(data, payload, built.warnings, dbCountLookup, graphMeta);
-      renderFilterResults(data);
-      await translateExtensionsToNaturalLanguage(data);
-      preferredOutputEl.textContent = JSON.stringify(
-        {
-          result: data,
-          payload,
-          warnings: built.warnings,
-        },
-        null,
-        2
-      );
-    } catch (err) {
-      console.error(err);
-      preferredMetaEl.textContent = "Cannot connect to /api/pyarg/evaluate.";
-      // Fallback: keep graph visible even when backend is unreachable.
-      drawPreferredGraph({ extensions: [[]], derived: [[]], count: 0 }, payload, built.warnings, dbCountLookup, graphMeta);
-      preferredOutputEl.textContent = JSON.stringify({ payload, warnings: built.warnings }, null, 2);
-      renderFilterResults({ extensions: [] });
-      await translateExtensionsToNaturalLanguage({ extensions: [], accepted_assumptions: [] });
     }
+
+    preferredMetaEl.textContent = `Evaluating ${selectedSemantics} semantics...`;
+    preferredOutputEl.textContent = JSON.stringify({ payload, warnings, status: "running" }, null, 2);
+    setSemanticsWaitingDisplay();
+    setLlmWaitingForSemantics();
+
+    let data = null;
+    const evalStartedAt = performance.now();
+    try {
+      data = await requestPyArgEvaluationJob(payload, {
+        onProgress: ({ status, elapsedMs }) => {
+          if (requestId !== preferredRequestSeq) return;
+          const elapsedSec = Math.max(0, Math.floor((Number(elapsedMs) || 0) / 1000));
+          preferredMetaEl.textContent =
+            `Evaluating ${selectedSemantics} semantics... job=${status || "running"} elapsed=${elapsedSec}s (this can take 10-20 minutes)`;
+        },
+      });
+    } catch (err) {
+      if (requestId !== preferredRequestSeq) return;
+      const elapsedMs = Math.max(0, performance.now() - evalStartedAt);
+      preferredMetaEl.textContent = err?.message || `Failed to compute ${selectedSemantics} extensions.`;
+      preferredOutputEl.textContent = JSON.stringify({
+        payload,
+        warnings,
+        elapsed_ms: Math.round(elapsedMs),
+        elapsed_seconds: Number((elapsedMs / 1000).toFixed(3)),
+        error: String(err?.message || err),
+      }, null, 2);
+      semanticsResultCache.set(cacheKey, {
+        error: String(err?.message || err),
+        rawEvaluation: null,
+        display: {
+          extensionLabels: ["{}"],
+          acceptedAssumptions: [],
+          summary: String(err?.message || err),
+        },
+      });
+      renderFilterResults({ extensions: [] });
+      setNaturalLanguageOutput("Cannot start the LLM explanation because semantics evaluation failed.", "Semantics evaluation failed");
+      setAcceptedNaturalLanguageOutput("Cannot start the accepted assumptions explanation because semantics evaluation failed.", "Semantics evaluation failed");
+      return;
+    }
+    if (requestId !== preferredRequestSeq) return;
+
+    const elapsedMs = Math.max(0, performance.now() - evalStartedAt);
+    data = {
+      ...data,
+      elapsed_ms: Math.round(elapsedMs),
+      elapsed_seconds: Number((elapsedMs / 1000).toFixed(3)),
+    };
+    const display = buildCachedSemanticsDisplay(data);
+    semanticsResultCache.set(cacheKey, {
+      error: null,
+      rawEvaluation: data,
+      display,
+    });
+    preferredMetaEl.textContent = display.summary;
+    lastSemanticsResult = data;
+    renderCachedSemanticsDisplay(display);
+    await explainFormalSemantics(data);
+    preferredOutputEl.textContent = JSON.stringify(
+      {
+        summary: display.summary,
+        result: data,
+        payload,
+        warnings,
+      },
+      null,
+      2
+    );
   }
 
   async function loadGraph() {
     try {
+      llmRequestSeq += 1;
+      renderMainGraphMessage("Loading graph...", "Waiting for /api/aba-graph response.", "info");
+      metaEl.textContent = `Loading graph for topic=${topic}, sentiment=${sentiment}, supporting=${supporting}...`;
+      if (preferredMetaEl) preferredMetaEl.textContent = "Loading semantics...";
+      if (preferredOutputEl) preferredOutputEl.textContent = "Waiting for backend evaluation...";
+      setPayloadJsonOutput("Loading payload...");
+      setSemanticsWaitingDisplay();
+      setLlmWaitingForSemantics();
       const q = new URLSearchParams({
         topic,
         sentiment,
         supporting,
+        layer_mode: selectedLayerMode,
         attack_mode: attackMode,
         attack_depth: attackDepth,
         focus_only: focusOnly,
         show_all_contrary: showAllContrary,
+        semantics: selectedSemantics,
+        strategy: selectedStrategy,
       });
       const resp = await apiFetch(`/api/aba-graph?${q.toString()}`);
       const data = await resp.json();
       if (!resp.ok) {
         metaEl.textContent = data.error || "Failed to load graph.";
+        renderMainGraphMessage("Failed to load graph", data.error || "The backend returned an error for /api/aba-graph.");
+        jsonOutputEl.textContent = JSON.stringify(data || {}, null, 2);
+        setPayloadJsonOutput("-");
+        if (preferredMetaEl) preferredMetaEl.textContent = "Cannot load semantics because graph API failed.";
+        if (preferredOutputEl) preferredOutputEl.textContent = JSON.stringify(data || {}, null, 2);
+        setNaturalLanguageOutput("-", "");
+        setAcceptedNaturalLanguageOutput("-", "");
+        setGraphSummaryOutput("-", "");
+        return;
+      }
+
+      if (!Array.isArray(data.nodes) || !data.nodes.length) {
+        metaEl.textContent = "Graph API returned no nodes.";
+        renderMainGraphMessage("No graph nodes returned", "The backend response succeeded but did not contain any drawable nodes.");
+        jsonOutputEl.textContent = JSON.stringify(data || {}, null, 2);
+        setPayloadJsonOutput(JSON.stringify(data?.framework?.payload || {}, null, 2));
+        if (preferredMetaEl) preferredMetaEl.textContent = "No graph nodes were returned.";
+        if (preferredOutputEl) preferredOutputEl.textContent = JSON.stringify(data || {}, null, 2);
+        setNaturalLanguageOutput("-", "");
+        setAcceptedNaturalLanguageOutput("-", "");
+        setGraphSummaryOutput("-", "");
         return;
       }
 
       if (data.meta) {
+        const selectedClaim = data.meta.selectedClaim ?? "-";
+        const opposingClaim = data.meta.opposingClaim ?? "-";
+        const defenseLayer = data.meta.defenseLayerLabel ?? "-";
         metaEl.textContent =
           `topic=${topic}, sentiment=${sentiment}, supporting=${supporting}, ` +
-          `claimA=${data.meta.claimA ?? "-"}, claimB=${data.meta.claimB ?? "-"}, ` +
+          `layer_mode=${data.meta.layerMode ?? selectedLayerMode}, ` +
+          `selectedClaim=${selectedClaim}, opposingClaim=${opposingClaim}, defenseLayer=${defenseLayer}, ` +
           `attacks=${data.meta.attackEdgesCount ?? 0}, contrary_candidates=${data.meta.contraryCandidatesCount ?? 0}, ` +
           `mode=${data.meta.attackMode ?? attackMode}, depth=${data.meta.attackDepth ?? attackDepth}, focus_only=${data.meta.focusOnly ?? focusOnly}`;
         setToggleButton(data.meta);
@@ -2490,29 +1928,39 @@
       lastLoadedGraph = data;
       updateSemanticsHeader();
       drawGraph(data);
+      scheduleWorkspaceLayoutSync();
       jsonOutputEl.textContent = JSON.stringify(data, null, 2);
+      const graphSummaryRequestId = ++graphSummarySeq;
+      await summarizeGraphForUsers(graphSummaryRequestId);
       await loadPreferred(data);
     } catch (err) {
       console.error(err);
       metaEl.textContent = "Cannot connect to backend API.";
+      renderMainGraphMessage("Cannot connect to backend API", String(err?.message || err || "Unknown error"));
       if (preferredMetaEl) preferredMetaEl.textContent = "Cannot load semantics because graph API failed.";
+      if (preferredOutputEl) preferredOutputEl.textContent = String(err?.stack || err?.message || err || "");
+      if (jsonOutputEl) jsonOutputEl.textContent = String(err?.stack || err?.message || err || "");
+      setPayloadJsonOutput("-");
       setNaturalLanguageOutput("-", "");
+      setAcceptedNaturalLanguageOutput("-", "");
       setGraphSummaryOutput("-", "");
     }
   }
 
   attachPanZoom();
-  attachPreferredPanZoom();
-  if (llmModelSelectEl) llmModelSelectEl.value = selectedLlmModel;
+  if (llmModelSelectEls.length) {
+    for (const el of llmModelSelectEls) {
+      el.value = selectedLlmModel;
+      el.disabled = false;
+      el.title = "Uses your local Ollama server";
+    }
+  }
   if (layerModeSelectEl) layerModeSelectEl.value = selectedLayerMode;
   if (semanticsSelectEl) semanticsSelectEl.value = selectedSemantics;
   if (strategySelectEl) strategySelectEl.value = selectedStrategy;
   updateSemanticsHeader();
 
   function applyFilterFromControls() {
-    selectedLayerMode = layerModeSelectEl && SUPPORTED_LAYER_MODES.includes(String(layerModeSelectEl.value || "").trim().toLowerCase())
-      ? String(layerModeSelectEl.value || "").trim().toLowerCase()
-      : "layer2";
     selectedSemantics = semanticsSelectEl && SUPPORTED_SEMANTICS.includes(semanticsSelectEl.value)
       ? semanticsSelectEl.value
       : "Preferred";
@@ -2525,29 +1973,56 @@
     u.searchParams.set("strategy", selectedStrategy);
     window.history.replaceState(null, "", u.toString());
     updateSemanticsHeader();
-    if (lastLoadedGraph) loadPreferred(lastLoadedGraph);
+    if (lastLoadedGraph) {
+      loadPreferred(lastLoadedGraph);
+    } else {
+      loadGraph();
+    }
   }
 
-  if (layerModeSelectEl) layerModeSelectEl.addEventListener("change", applyFilterFromControls);
+  function applyLayerModeFromControls() {
+    selectedLayerMode = layerModeSelectEl && SUPPORTED_LAYER_MODES.includes(layerModeSelectEl.value)
+      ? layerModeSelectEl.value
+      : "layer2";
+    const u = new URL(window.location.href);
+    u.searchParams.set("layer_mode", selectedLayerMode);
+    u.searchParams.set("semantics", selectedSemantics);
+    u.searchParams.set("strategy", selectedStrategy);
+    window.history.replaceState(null, "", u.toString());
+    loadGraph();
+  }
+
+  if (layerModeSelectEl) layerModeSelectEl.addEventListener("change", applyLayerModeFromControls);
   if (semanticsSelectEl) semanticsSelectEl.addEventListener("change", applyFilterFromControls);
   if (strategySelectEl) strategySelectEl.addEventListener("change", applyFilterFromControls);
-  if (llmModelSelectEl) {
-    llmModelSelectEl.addEventListener("change", () => {
-      selectedLlmModel = String(llmModelSelectEl.value || "qwen2.5").trim();
-      if (!["gpt-4o", "gemini-2.5-pro", "qwen2.5", "gemma3:4b"].includes(selectedLlmModel)) selectedLlmModel = "qwen2.5";
-      const u = new URL(window.location.href);
-      u.searchParams.set("llm_model", selectedLlmModel);
-      window.history.replaceState(null, "", u.toString());
-      if (lastSemanticsResult) {
-        translateExtensionsToNaturalLanguage(lastSemanticsResult);
-      }
-    });
+  if (llmModelSelectEls.length) {
+    for (const modelSelectEl of llmModelSelectEls) {
+      modelSelectEl.addEventListener("change", () => {
+        selectedLlmModel = String(modelSelectEl.value || "gemma3:4b").trim();
+        if (!SUPPORTED_LLM_MODELS.includes(selectedLlmModel)) selectedLlmModel = "gemma3:4b";
+        for (const otherEl of llmModelSelectEls) {
+          if (otherEl.value !== selectedLlmModel) otherEl.value = selectedLlmModel;
+        }
+        const u = new URL(window.location.href);
+        u.searchParams.set("layer_mode", selectedLayerMode);
+        u.searchParams.set("llm_model", selectedLlmModel);
+        window.history.replaceState(null, "", u.toString());
+        if (lastLoadedGraph) {
+          const graphSummaryRequestId = ++graphSummarySeq;
+          summarizeGraphForUsers(graphSummaryRequestId);
+        }
+        if (lastSemanticsResult) {
+          explainFormalSemantics(lastSemanticsResult);
+        }
+      });
+    }
   }
   if (toggleAllBtn) {
     toggleAllBtn.addEventListener("click", () => {
       const nowAll = showAllContrary === "1" || showAllContrary === "true" || showAllContrary === "yes";
       showAllContrary = nowAll ? "0" : "1";
       const u = new URL(window.location.href);
+      u.searchParams.set("layer_mode", selectedLayerMode);
       u.searchParams.set("show_all_contrary", showAllContrary);
       u.searchParams.set("semantics", selectedSemantics);
       u.searchParams.set("strategy", selectedStrategy);
@@ -2555,7 +2030,39 @@
       loadGraph();
     });
   }
+  if (graphZoomOutBtnEl) graphZoomOutBtnEl.addEventListener("click", () => zoomGraphByFactor(0.9));
+  if (graphZoomInBtnEl) graphZoomInBtnEl.addEventListener("click", () => zoomGraphByFactor(1.1));
+  if (graphFitBtnEl) graphFitBtnEl.addEventListener("click", () => autoFitMainViewport());
+  if (graphFullscreenBtnEl && graphWorkspacePanelEl) {
+    graphFullscreenBtnEl.addEventListener("click", async () => {
+      try {
+        if (document.fullscreenElement === graphWorkspacePanelEl) {
+          await document.exitFullscreen();
+        } else {
+          await graphWorkspacePanelEl.requestFullscreen();
+        }
+      } catch (err) {
+        console.warn("Fullscreen toggle failed:", err);
+      }
+    });
+    document.addEventListener("fullscreenchange", () => {
+      const isFullscreen = document.fullscreenElement === graphWorkspacePanelEl;
+      graphFullscreenBtnEl.textContent = isFullscreen ? "Exit full screen" : "Full screen";
+      scheduleWorkspaceLayoutSync();
+      requestAnimationFrame(() => autoFitMainViewport());
+    });
+  }
+  const accordionEls = Array.from(document.querySelectorAll(".accordion-card"));
+  for (const card of accordionEls) {
+    card.addEventListener("toggle", () => {
+      if (!card.open) return;
+      for (const other of accordionEls) {
+        if (other !== card) other.open = false;
+      }
+      scheduleWorkspaceLayoutSync();
+    });
+  }
+  window.addEventListener("resize", scheduleWorkspaceLayoutSync);
+  scheduleWorkspaceLayoutSync();
   loadGraph();
 })();
-
-
