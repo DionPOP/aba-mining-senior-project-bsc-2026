@@ -1,10 +1,27 @@
-# Project_ABA
+# Project_ABA (Current Codebase Guide)
 
-Argument-Based Analysis (ABA) web app for exploring hotel-review reasoning:
-- `frontend`: static HTML/CSS/JS pages
-- `backend`: Node.js API + MySQL queries + Python `py_arg` runner
+Project_ABA is a hotel-review argument analysis system with:
+- Static frontend pages (`frontend/`)
+- Node.js API backend (`backend/`)
+- MySQL data source (`database/ABA.sql`)
+- Python semantics runner (`backend/scripts/pyarg_runner.py` using `py_arg`)
 
-## Current Structure
+This README reflects the current code behavior in this repository.
+
+## Architecture
+
+1. User opens frontend pages (served by Express static middleware or any static server).
+2. Frontend calls backend APIs:
+   - review data endpoints
+   - ABA graph endpoint
+   - PyArg evaluation endpoints
+   - LLM explanation endpoints
+3. Backend reads topic tables + contrary tables from MySQL.
+4. Backend builds canonical ABA graph/framework in `abaGraphService`.
+5. Backend evaluates semantics via Python (`pyarg_runner.py`).
+6. Frontend renders graph layers, semantics result, and optional LLM summaries.
+
+## Repository Structure
 
 ```text
 Project_ABA/
@@ -29,25 +46,28 @@ Project_ABA/
 |  |- aboutus.html
 |  `- assets/
 |     |- css/
-|     |- js/
-|     `- images/
+|     `- js/
 |- database/
 |  `- ABA.sql
-|- requirements.txt
+|- .env.example
+|- FILE_ROLES.md
+|- README.md
+|- Procfile
 |- package.json
-`- package-lock.json
+|- package-lock.json
+`- requirements.txt
 ```
 
 ## Tech Stack
 
-- Node.js (Express + mysql2)
-- MySQL
-- Python + `python-argumentation` (`py_arg`)
-- Static frontend (no bundler)
+- Node.js (Express 5, `mysql2`, `cors`, `redis`)
+- MySQL 8+
+- Python 3 + `python-argumentation` (`py_arg`)
+- Vanilla HTML/CSS/JS frontend (no bundler)
 
 ## Prerequisites
 
-- Node.js 18+ (recommended 20 LTS)
+- Node.js 18+
 - MySQL 8+
 - Python 3.10+
 - pip
@@ -61,7 +81,7 @@ python -m pip install -r requirements.txt
 
 ## Database Setup
 
-1. Create database/user:
+1. Create DB/user (example):
 
 ```sql
 CREATE DATABASE IF NOT EXISTS ABA;
@@ -72,7 +92,7 @@ GRANT ALL PRIVILEGES ON ABA.* TO 'aba'@'127.0.0.1';
 FLUSH PRIVILEGES;
 ```
 
-2. Import SQL:
+2. Import schema/data:
 
 ```bash
 mysql -u aba -p ABA < database/ABA.sql
@@ -80,7 +100,9 @@ mysql -u aba -p ABA < database/ABA.sql
 
 ## Environment Variables
 
-Backend loads `.env` automatically from project root.
+Backend loads `.env` from project root.
+
+Core server and DB:
 
 ```env
 PORT=3000
@@ -89,113 +111,255 @@ DB_PORT=3306
 DB_USER=aba
 DB_PASSWORD=aba12345
 DB_NAME=ABA
-PYTHON_EXECUTABLE=python
-
-# Optional LLM providers
-OPENAI_API_KEY=
-GEMINI_API_KEY=
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_TRANSLATE_MODEL=qwen2.5
-LLM_TRANSLATE_MODEL=gpt-4o-mini
-GEMINI_TRANSLATE_MODEL=gemini-2.5-pro
+CORS_ORIGINS=http://localhost:3000,http://localhost:5500
+JSON_BODY_LIMIT=20mb
 ```
+
+Python / PyArg behavior:
+
+```env
+PYTHON_EXECUTABLE=python
+PYARG_MAX_STDOUT_BYTES=2097152
+PYARG_INCLUDE_DEBUG_FIELDS=0
+PYARG_MAX_EXTENSIONS=200
+PYARG_RAW_LOG_ENABLED=1
+PYARG_RAW_LOG_STDOUT=1
+PYARG_RAW_LOG_FILE=logs/pyarg_raw.jsonl
+PYARG_RAW_EXCEL_FILE=logs/pyarg_raw.csv
+PYARG_LOG_DEDUP_ENABLED=1
+PYARG_LOG_DEDUP_TTL_SEC=86400
+LOG_ROTATE_MAX_BYTES=10485760
+LOG_ROTATE_KEEP=3
+```
+
+LLM (currently Ollama only):
+
+```env
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_TRANSLATE_MODEL=gemma3:4b
+LLM_GRAPH_SUMMARY_LOG_FILE=logs/llm_graph_summary.jsonl
+LLM_GRAPH_SUMMARY_EXCEL_FILE=logs/llm_graph_summary.csv
+LLM_GRAPH_SUMMARY_DEDUP_ENABLED=1
+LLM_GRAPH_SUMMARY_DEDUP_TTL_SEC=604800
+```
+
+Async job storage (required for `.../jobs` endpoints):
+
+```env
+REDIS_URL=redis://...              # or REDIS_TLS_URL=rediss://...
+ASYNC_JOB_REDIS_PREFIX=aba:job
+REDIS_TLS_REJECT_UNAUTHORIZED=0
+LLM_JOB_TTL_MS=300000
+LLM_JOB_MAX=120
+PYARG_JOB_TTL_MS=1200000
+PYARG_JOB_MAX=120
+```
+
+Important:
+- If `REDIS_URL` is not set, async job endpoints return errors.
+- Sync endpoints (`/api/pyarg/evaluate`, `/api/llm/translate-extension`) still work without Redis.
+
+PyArg raw logging:
+- Backend logs raw PyArg request/response/error for both sync and async evaluation paths.
+- Default stdout log prefix: `[pyarg_raw]` (useful on Heroku log stream).
+- Default file log path: `logs/pyarg_raw.jsonl` (local/dev convenience).
+- Excel-friendly file log path: `logs/pyarg_raw.csv`.
+- Logging is written immediately when payload is received (`status=received`), without waiting for extension output.
+- Duplicate writes are suppressed per payload fingerprint (default enabled):
+  - `PYARG_LOG_DEDUP_ENABLED=1`
+  - `PYARG_LOG_DEDUP_TTL_SEC=86400` (1 day)
+- Large file protection (applies to both PyArg and LLM log files):
+  - `LOG_ROTATE_MAX_BYTES=10485760` (10MB, rotate when size is >= this value)
+  - `LOG_ROTATE_KEEP=3` (keep `file`, `file.1`, `file.2`, `file.3`)
+- Each entry is grouped by sections:
+  - `meta`: timestamp/status/size/time
+  - `stdin_input`: keys sent to Python stdin
+    - `language`
+    - `assumptions`
+    - `contraries`
+    - `rules`
+    - `query`
+    - `semantics_specification`
+    - `strategy_specification`
+  - `stdout_output` (success) or `error` (failure)
+  - `payload_raw` (full original payload)
+
+Heroku note:
+- Prefer reading from stdout logs (`heroku logs --tail | findstr pyarg_raw`) because dyno filesystem is ephemeral.
+
+LLM graph-summary logging:
+- When `task=graph_summary`, backend appends one JSON line per request/response to:
+  - `logs/llm_graph_summary.jsonl` (default), or
+  - path from `LLM_GRAPH_SUMMARY_LOG_FILE`
+- Backend also appends Excel-compatible CSV rows to:
+  - `logs/llm_graph_summary.csv` (default), or
+  - path from `LLM_GRAPH_SUMMARY_EXCEL_FILE`
+- Duplicate writes are suppressed per graph fingerprint (default enabled):
+  - `LLM_GRAPH_SUMMARY_DEDUP_ENABLED=1`
+  - `LLM_GRAPH_SUMMARY_DEDUP_TTL_SEC=604800` (7 days)
+- Each log line includes:
+  - full `request` payload (including `graphNodes` and `graphEdges`)
+  - `llm_input` prompts sent to model
+  - `llm_output` on success or `error` on failure
 
 ## Run
 
-### 1) Start backend
+Start backend (also serves frontend static files):
 
 ```bash
 npm start
 ```
 
-Backend runs on:
-- `http://localhost:3000`
+If you want async job endpoints (`/api/*/jobs`) in local development, start Redis first.
 
-### 2) Serve frontend
+PowerShell example:
 
-```bash
-python -m http.server 5500 --directory frontend
+```powershell
+docker start aba-redis
+$env:REDIS_URL="redis://127.0.0.1:6379"
+npm start
 ```
 
 Open:
-- `http://localhost:5500/homepage.html`
-- `http://localhost:5500/review_category.html?type=positive`
-- `http://localhost:5500/review_category.html?type=negative`
+- `http://localhost:3000/`
+- `http://localhost:3000/review_category.html?type=positive`
+- `http://localhost:3000/review_category.html?type=negative`
 
-If backend is on another host, add `api_base` in URL:
-- `review_category.html?type=positive&api_base=http://<BACKEND_HOST>:3000`
+Alternative static serving is possible, but not required because Express already serves `frontend/`.
 
-## Supported Review Topics (Current)
+## Supported Topics
 
-Backend currently supports:
-- `check-in`
-- `check-out`
+Backend topic mapping is currently limited to:
+- `check-in` / `check_in`
+- `check-out` / `check_out`
 - `staff`
 - `price`
 
-(`taxi`, `location`, `food`, `room`, etc. are not active in backend topic mapping yet.)
+Other topics in DB/UI are not supported by backend mapping unless added in `backend/utils/normalizers.js`.
 
 ## API Endpoints
 
 ### Health
 - `GET /api/health`
 
-### Review endpoints
+Response example:
+
+```json
+{ "ok": true, "db": true }
+```
+
+### Review Data
 - `GET /api/topic-ratios`
 - `GET /api/review-data?topic=<topic>&sentiment=<positive|negative>`
 
-### ABA graph endpoint
+### ABA Graph
 - `GET /api/aba-graph`
 
-### PyArg evaluate endpoint
+Key query params used by backend:
+- `topic` (required)
+- `supporting` (required)
+- `sentiment` = `positive|negative|all` (default `all`)
+- `k` (default 8, max 50)
+- `attack_mode` = `all|cross` (default `all`)
+- `attack_depth` = `1|2` (default `1`)
+- `layer_mode` = `layer1|layer2` (default `layer2`)
+- `focus_only` = `1|0|true|false|yes|no` (default true)
+- `show_all_contrary` = boolean-like
+- `semantics` (default `Preferred`)
+- `strategy` = `Credulous|Skeptical` (default `Credulous`)
+
+Notes:
+- `layer1` keeps levels up to 4.
+- `layer2` keeps levels up to 7 (full graph).
+
+### PyArg Evaluate (Sync)
 - `POST /api/pyarg/evaluate`
 
-Body (example):
+Expected body shape:
 
 ```json
 {
-  "language": ["happy", "eating", "good_food", "not_eating"],
-  "assumptions": ["eating"],
-  "contraries": { "eating": "not_eating" },
+  "language": ["a", "b", "c"],
+  "assumptions": ["a"],
+  "contraries": { "a": "not_a" },
   "rules": [
-    { "name": "Rule1", "premises": ["good_food", "eating"], "conclusion": "happy" }
+    { "name": "Rule1", "premises": ["a", "b"], "conclusion": "c" }
   ],
-  "query": "happy",
+  "query": "c",
   "semantics_specification": "Preferred",
   "strategy_specification": "Credulous"
 }
 ```
 
-### LLM translation endpoint
+Supported semantics in Python runner:
+- `Stable`
+- `Preferred`
+- `Conflict-Free`
+- `Naive`
+- `Admissible`
+- `Complete`
+- `SemiStable`
+- `Grounded`
+
+### PyArg Evaluate (Async Job)
+- `POST /api/pyarg/evaluate/jobs` -> returns `202` with `job_id`
+- `GET /api/pyarg/evaluate/jobs/:jobId` -> job status/result
+
+### LLM Explanation (Sync)
 - `POST /api/llm/translate-extension`
 
-Used by `pyarg.html` for:
-- extension natural-language explanation
-- graph summary bullets
+Notes:
+- `LLM_PROVIDER` currently supports only `ollama`.
+- Model is allowlisted in backend:
+  - `gemma3:4b`
+  - `deepseek-r1:7b`
+  - `qwen2.5:7b`
 
-Model/provider behavior:
-- explicit `model` can route provider (`gpt-4o`, `gemini-2.5-pro`, `qwen2.5`, `gemma3:4b`)
-- fallback order (auto): Ollama -> OpenAI -> Gemini
+### LLM Explanation (Async Job)
+- `POST /api/llm/translate-extension/jobs` -> returns `202` with `job_id`
+- `GET /api/llm/translate-extension/jobs/:jobId` -> job status/result
 
 ## Frontend Flow
 
-1. `homepage.html`: landing page + slider  
-2. `review_category.html`: choose topic and supporting proposition  
-3. click `Show` -> opens `pyarg.html` with query params  
-4. `pyarg.html` calls:
-   - `/api/aba-graph`
-   - `/api/pyarg/evaluate`
-   - `/api/llm/translate-extension` (optional LLM)
+1. `homepage.html`: entry page.
+2. `review_category.html`:
+   - loads topic ratios
+   - loads positive/negative proposition rows
+   - sends selected row to graph page via query string
+3. `pyarg.html` (`frontend/assets/js/pyarg-page.js`):
+   - loads `/api/aba-graph`
+   - renders layered argument graph
+   - requests semantics via PyArg (prefers async jobs)
+   - requests natural-language explanation via LLM (prefers async jobs)
 
 ## Quick Checks
 
 ```bash
 curl http://localhost:3000/api/health
 curl "http://localhost:3000/api/topic-ratios"
+curl "http://localhost:3000/api/review-data?topic=staff&sentiment=positive"
 ```
 
-## Notes
+## Troubleshooting
 
-- No automated tests are configured in `package.json` yet.
-- `requirements.txt` currently contains:
-  - `python-argumentation`
+- `Unsupported topic` on `/api/aba-graph`:
+  - topic is not mapped in `TOPIC_TABLES`.
+
+- `Missing topic tables`:
+  - DB import incomplete or wrong DB selected.
+
+- PyArg errors:
+  - verify Python + `python-argumentation` installation.
+  - set `PYTHON_EXECUTABLE` if command name differs.
+
+- Async job endpoints fail immediately:
+  - set `REDIS_URL` (or `REDIS_TLS_URL`).
+
+- LLM request fails:
+  - ensure Ollama is running at `OLLAMA_BASE_URL`.
+  - use allowlisted model names above.
+
+## Additional Documentation
+
+- Detailed file-by-file responsibilities: `FILE_ROLES.md`

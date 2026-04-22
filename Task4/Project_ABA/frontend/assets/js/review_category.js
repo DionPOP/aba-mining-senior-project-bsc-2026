@@ -1,18 +1,15 @@
-const MAX_TAGS = 5;
-
 (function () {
   const cards = document.querySelectorAll(".grid-cards .c-card");
   const titleEl = document.getElementById("review-title");
-  const typeLabelEl = document.getElementById("review-type-label");
-  const rowsContainer = document.getElementById("rows-container");
-  const footText = document.getElementById("foot-text");
+
+  const positiveRowsContainer = document.getElementById("positive-rows-container");
+  const negativeRowsContainer = document.getElementById("negative-rows-container");
 
   const searchInput = document.getElementById("search-input");
-  const sentimentFilter = document.getElementById("sentiment-filter");
-
   const panelEl = document.getElementById("panel");
 
   const DEFAULT_ENABLED_TOPICS = new Set(["check-in", "check-out", "staff", "price"]);
+  const MAX_TAGS = 5;
 
   function canonicalTopic(raw) {
     const t = String(raw || "").trim().toLowerCase().replace(/[_\s]+/g, "-");
@@ -26,16 +23,12 @@ const MAX_TAGS = 5;
   }
 
   const params = new URLSearchParams(window.location.search);
-  const type = (params.get("type") || "positive").toLowerCase();
-  if (sentimentFilter && (type === "positive" || type === "negative")) {
-    sentimentFilter.value = type;
-  }
-
   const apiClient = window.createApiClient({ params });
   const { apiFetch } = apiClient;
 
   let activeTopic = null;
-  let lastData = [];
+  let positiveData = [];
+  let negativeData = [];
 
   cards.forEach((card) => {
     const t = canonicalTopic(card.dataset.topic || "");
@@ -60,36 +53,117 @@ const MAX_TAGS = 5;
     if (titleEl) titleEl.textContent = `${activeTopic}`;
   }
 
+  async function fetchReviewDataBySentiment(topic, sentiment) {
+    const resp = await apiFetch(
+      `/api/review-data?topic=${encodeURIComponent(topic)}&sentiment=${encodeURIComponent(sentiment)}`
+    );
+    const data = await resp.json();
+    return Array.isArray(data.rows) ? data.rows : [];
+  }
+
   async function loadData() {
     if (!activeTopic) return;
 
-    const sentiment = (sentimentFilter?.value || "positive").toLowerCase();
-    document.body.classList.toggle("sentiment-negative", sentiment === "negative");
-
     const topic = canonicalTopic(activeTopic);
 
-    if (typeLabelEl) {
-      typeLabelEl.textContent = sentiment === "negative" ? "NEGATIVE REVIEW" : "POSITIVE REVIEW";
-    }
-
     try {
-      const resp = await apiFetch(
-        `/api/review-data?topic=${encodeURIComponent(topic)}&sentiment=${encodeURIComponent(sentiment)}`
-      );
-      const data = await resp.json();
-      lastData = Array.isArray(data.rows) ? data.rows : [];
-      renderRows();
+      const [posRows, negRows] = await Promise.all([
+        fetchReviewDataBySentiment(topic, "positive"),
+        fetchReviewDataBySentiment(topic, "negative"),
+      ]);
+
+      positiveData = posRows;
+      negativeData = negRows;
+      renderAllRows();
     } catch (e) {
       console.error(e);
-      lastData = [];
-      renderRows();
+      positiveData = [];
+      negativeData = [];
+      renderAllRows();
     }
   }
 
-  function renderRows() {
+  function createRow(r, sentiment) {
+    const row = document.createElement("div");
+    row.className = "row row-4";
+
+    const support = document.createElement("div");
+    support.className = "support";
+    support.textContent = r.proposition ?? "";
+
+    const count = document.createElement("div");
+    count.className = "count";
+    count.textContent = String(r.cnt ?? "");
+
+    const tags = document.createElement("div");
+    tags.className = "tags";
+
+    const contraList = Array.isArray(r.contraries) ? r.contraries : [];
+    let expanded = false;
+
+    function renderTagList() {
+      tags.innerHTML = "";
+
+      const showList = expanded ? contraList : contraList.slice(0, MAX_TAGS);
+
+      for (const x of showList) {
+        const label = String(x.proposition || "");
+        const cnt = x.cnt ?? 0;
+
+        const span = document.createElement("span");
+        span.className = "tag";
+        span.innerHTML = `${label} <b>${cnt}</b>`;
+        tags.appendChild(span);
+      }
+
+      if (contraList.length > MAX_TAGS) {
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "tag-more";
+        more.textContent = expanded ? "less" : "...";
+        more.addEventListener("click", (e) => {
+          e.stopPropagation();
+          expanded = !expanded;
+          renderTagList();
+        });
+        tags.appendChild(more);
+      }
+    }
+
+    renderTagList();
+
+    const detail = document.createElement("div");
+    const btn = document.createElement("button");
+    btn.className = "btn-show";
+    btn.type = "button";
+    btn.textContent = "Show";
+    btn.addEventListener("click", () => {
+      if (!activeTopic) return;
+      const q = new URLSearchParams({
+        topic: canonicalTopic(activeTopic),
+        selected_topic: String(activeTopic || ""),
+        sentiment,
+        supporting: String(r.proposition || ""),
+        show_all_contrary: "1",
+      });
+      const lastWorkingApiBase = apiClient.getLastWorkingApiBase();
+      if (lastWorkingApiBase) q.set("api_base", lastWorkingApiBase);
+      window.location.href = `./pyarg.html?${q.toString()}`;
+    });
+    detail.appendChild(btn);
+
+    row.appendChild(support);
+    row.appendChild(count);
+    row.appendChild(tags);
+    row.appendChild(detail);
+
+    return row;
+  }
+
+  function renderRowsToContainer(rows, container, sentiment) {
     const keyword = (searchInput?.value || "").trim().toLowerCase();
 
-    const filtered = lastData.filter((r) => {
+    const filtered = rows.filter((r) => {
       const supportText = String(r.proposition || "").toLowerCase();
       const contraryText = Array.isArray(r.contraries)
         ? r.contraries.map((x) => String(x.proposition || "")).join(" ").toLowerCase()
@@ -97,87 +171,16 @@ const MAX_TAGS = 5;
       return !keyword || supportText.includes(keyword) || contraryText.includes(keyword);
     });
 
-    rowsContainer.innerHTML = "";
+    container.innerHTML = "";
 
     for (const r of filtered) {
-      const row = document.createElement("div");
-      row.className = "row";
-
-      const support = document.createElement("div");
-      support.className = "support";
-      support.textContent = r.proposition ?? "";
-
-      const count = document.createElement("div");
-      count.className = "count";
-      count.textContent = String(r.cnt ?? "");
-
-      const tags = document.createElement("div");
-      tags.className = "tags";
-
-      const contraList = Array.isArray(r.contraries) ? r.contraries : [];
-      let expanded = false;
-
-      function renderTagList() {
-        while (tags.firstChild) tags.removeChild(tags.firstChild);
-
-        const showList = expanded ? contraList : contraList.slice(0, MAX_TAGS);
-        for (const x of showList) {
-          const label = String(x.proposition || "");
-          const cnt = x.cnt ?? 0;
-
-          const span = document.createElement("span");
-          span.className = "tag";
-          span.innerHTML = `${label} <b>${cnt}</b>`;
-          tags.appendChild(span);
-        }
-
-        if (contraList.length > MAX_TAGS) {
-          const more = document.createElement("button");
-          more.type = "button";
-          more.className = "tag-more";
-          more.textContent = expanded ? "less" : "...";
-          more.addEventListener("click", (e) => {
-            e.stopPropagation();
-            expanded = !expanded;
-            renderTagList();
-          });
-          tags.appendChild(more);
-        }
-      }
-
-      renderTagList();
-
-      const detail = document.createElement("div");
-      const btn = document.createElement("button");
-      btn.className = "btn-show";
-      btn.type = "button";
-      btn.textContent = "Show";
-      btn.addEventListener("click", () => {
-        if (!activeTopic) return;
-        const sentiment = (sentimentFilter?.value || "positive").toLowerCase();
-        const q = new URLSearchParams({
-          topic: canonicalTopic(activeTopic),
-          sentiment,
-          supporting: String(r.proposition || ""),
-          show_all_contrary: "1",
-        });
-        const lastWorkingApiBase = apiClient.getLastWorkingApiBase();
-        if (lastWorkingApiBase) q.set("api_base", lastWorkingApiBase);
-        window.location.href = `./pyarg.html?${q.toString()}`;
-      });
-      detail.appendChild(btn);
-
-      row.appendChild(support);
-      row.appendChild(count);
-      row.appendChild(tags);
-      row.appendChild(detail);
-
-      rowsContainer.appendChild(row);
+      container.appendChild(createRow(r, sentiment));
     }
+  }
 
-    if (footText) {
-      footText.textContent = `Showing data 1 to ${filtered.length} of ${lastData.length} Supporting`;
-    }
+  function renderAllRows() {
+    renderRowsToContainer(positiveData, positiveRowsContainer, "positive");
+    renderRowsToContainer(negativeData, negativeRowsContainer, "negative");
   }
 
   cards.forEach((card) => {
@@ -189,8 +192,15 @@ const MAX_TAGS = 5;
     });
   });
 
-  if (sentimentFilter) sentimentFilter.addEventListener("change", loadData);
-  if (searchInput) searchInput.addEventListener("input", renderRows);
+  function findCardByTopicLabel(topicLabel) {
+    const wanted = canonicalTopic(topicLabel);
+    return Array.from(cards).find((card) => {
+      const cardTopic = canonicalTopic(card.dataset.topic || "");
+      return cardTopic === wanted;
+    }) || null;
+  }
+
+  if (searchInput) searchInput.addEventListener("input", renderAllRows);
 
   async function loadTopicRatios() {
     try {
@@ -212,32 +222,16 @@ const MAX_TAGS = 5;
         const rightEl = ratioBox.querySelector(".pos");
         if (!leftEl || !rightEl) return;
 
-        const pageType = (new URLSearchParams(location.search).get("type") || "positive").toLowerCase();
-        const isPositivePage = pageType === "positive";
+        leftEl.classList.remove("neg");
+        leftEl.classList.add("pos");
+        rightEl.classList.remove("pos");
+        rightEl.classList.add("neg");
 
-        if (isPositivePage) {
-          leftEl.classList.remove("neg");
-          leftEl.classList.add("pos");
-          rightEl.classList.remove("pos");
-          rightEl.classList.add("neg");
+        leftEl.textContent = `${r.posPct}%`;
+        leftEl.style.width = `${r.posPct}%`;
 
-          leftEl.textContent = `${r.posPct}%`;
-          leftEl.style.width = `${r.posPct}%`;
-
-          rightEl.textContent = `${r.negPct}%`;
-          rightEl.style.width = `${r.negPct}%`;
-        } else {
-          leftEl.classList.remove("pos");
-          leftEl.classList.add("neg");
-          rightEl.classList.remove("neg");
-          rightEl.classList.add("pos");
-
-          leftEl.textContent = `${r.negPct}%`;
-          leftEl.style.width = `${r.negPct}%`;
-
-          rightEl.textContent = `${r.posPct}%`;
-          rightEl.style.width = `${r.posPct}%`;
-        }
+        rightEl.textContent = `${r.negPct}%`;
+        rightEl.style.width = `${r.negPct}%`;
       });
 
       const availableTopics = new Set(
@@ -258,7 +252,23 @@ const MAX_TAGS = 5;
     }
   }
 
-  setActiveCard(null);
-  showPanel(false);
-  loadTopicRatios();
+  async function initializePage() {
+    setActiveCard(null);
+    showPanel(false);
+  
+    await loadTopicRatios();
+  
+    const initialTopic = String(params.get("topic") || "").trim();
+    if (!initialTopic) return;
+  
+    const targetCard = findCardByTopicLabel(initialTopic);
+    if (!targetCard) return;
+    if (targetCard.dataset.enabled !== "1") return;
+  
+    setActiveCard(targetCard);
+    showPanel(true);
+    await loadData();
+  }
+  
+  initializePage();
 })();

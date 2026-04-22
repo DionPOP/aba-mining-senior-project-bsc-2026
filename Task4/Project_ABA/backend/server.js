@@ -52,8 +52,25 @@ const schemaCompatReady = Promise.resolve();
 
 console.log("[C] creating app...");
 const app = express();
-app.use(cors());
+const frontendDir = path.resolve(process.cwd(), "frontend");
+const CORS_ORIGINS = String(process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+const corsOptions = {
+    origin(origin, callback) {
+        // Non-browser requests (no Origin header) are allowed.
+        if (!origin) return callback(null, true);
+        if (CORS_ORIGINS.length === 0) return callback(null, true);
+        if (CORS_ORIGINS.includes(origin)) return callback(null, true);
+        return callback(new Error("CORS blocked: origin not allowed"));
+    },
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
+app.use(express.static(frontendDir));
 app.use(async (req, res, next) => {
     await schemaCompatReady;
     next();
@@ -93,11 +110,16 @@ app.get("/api/health", async (req, res) => {
 app.use(createReviewRouter({ reviewService }));
 app.use(createAbaRouter({ abaGraphService }));
 
+app.get("/", (req, res) => {
+    res.sendFile(path.join(frontendDir, "homepage.html"));
+});
+
 const PORT = Number(process.env.PORT || 3000);
 console.log("[E] about to listen on port", PORT);
 
 app.listen(PORT, () => {
     console.log("[F] API running at http://localhost:" + PORT);
+    console.log("[H] CORS_ORIGINS:", CORS_ORIGINS.length ? CORS_ORIGINS : "ALL (not restricted)");
 
     pool.query("SELECT DATABASE() AS db")
         .then(([rows]) => console.log("[G] DB connected to:", rows && rows[0] && rows[0].db))

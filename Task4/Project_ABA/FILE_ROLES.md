@@ -1,288 +1,268 @@
-# Project File Roles (Detailed)
+# FILE_ROLES.md (Current Code Mapping)
 
-This document explains what each major file does, how files connect, and where to make changes safely.
+This document explains what each major file currently does and where to change behavior safely.
 
-If you are new to this repository, read this file together with `README.md`.
+## 1) System Overview
 
----
+Current system shape:
+- Static frontend pages in `frontend/`
+- Express API in `backend/`
+- MySQL as source data store (`database/ABA.sql`)
+- Python `py_arg` runner for formal semantics
+- Optional Redis-backed async job queue for long-running PyArg and LLM calls
 
-## 1) High-Level Architecture
-
-The project is a classic **static frontend + API backend + MySQL + Python semantics engine** setup:
-
-1. Users open static pages in `frontend/`.
-2. Frontend JavaScript calls backend REST APIs (`backend/server.js` + routes).
-3. Backend reads review/argument data from MySQL (`backend/db/queries.js`).
-4. For ABA semantics, backend calls Python (`backend/scripts/pyarg_runner.py`) via child process.
-5. Backend returns graph/semantics JSON to frontend.
-6. Frontend renders graph and optional LLM summaries.
-
----
+Request path at runtime:
+1. Browser loads `frontend/*.html`.
+2. Frontend JS calls `/api/...` endpoints.
+3. Backend services fetch and shape DB data.
+4. Backend optionally calls Python runner for semantics.
+5. Backend optionally calls Ollama for NL explanation.
+6. Frontend renders graph + semantics + text explanations.
 
 ## 2) Root-Level Files
 
-- `README.md`  
-  Main project guide: setup, run commands, environment variables, API overview.
+- `README.md`
+  - Setup/run/API guide aligned to current code.
 
-- `FILE_ROLES.md`  
-  This file. Detailed role map of source files and how they interact.
+- `FILE_ROLES.md`
+  - This file.
 
-- `package.json`  
-  Node project manifest:
-  - runtime dependencies (`express`, `mysql2`, `cors`)
-  - scripts (`npm start` -> `node backend/server.js`)
-  - metadata.
+- `package.json`
+  - Node dependencies and scripts.
+  - `npm start` runs `node backend/server.js`.
 
-- `package-lock.json`  
-  Exact dependency lockfile for reproducible npm installs.
+- `package-lock.json`
+  - Locked dependency versions.
 
-- `requirements.txt`  
-  Python packages required by the semantics runner (`python-argumentation` / `py_arg`).
+- `requirements.txt`
+  - Python dependency list (currently `python-argumentation`).
 
----
+- `.env.example`
+  - Example env values used by backend.
+
+- `Procfile`
+  - Process declaration for deployment environments.
 
 ## 3) Database
 
-- `database/ABA.sql`  
-  SQL schema + seed/import data for the ABA/review domain.
-  This is the source of truth for database structure used by backend queries.
+- `database/ABA.sql`
+  - Schema + seed data.
+  - Includes:
+    - `head` metadata table (topic/sentiment/claim)
+    - topic tables such as `check_in`, `check_out`, `staff`, `price`
+    - contrary tables `contrary_<topic_table>`
 
-When backend behavior appears wrong, verify:
-1. expected tables/columns exist in imported schema, and
-2. topic-specific tables contain matching data.
+Backend logic assumes this schema shape. If schema/data changes, query/service logic may need updates.
 
----
+## 4) Backend (`backend/`)
 
-## 4) Backend Folder (`backend/`)
+### 4.1 Entry and App Wiring
 
-### 4.1 Entry Point
+- `backend/server.js`
+  - Loads `.env` manually from project root.
+  - Creates Express app, CORS policy, JSON parser.
+  - Serves `frontend/` statically.
+  - Creates MySQL pool.
+  - Instantiates query layer + services.
+  - Registers routers:
+    - review router
+    - ABA router
+  - Exposes `GET /api/health` and `/` -> `homepage.html`.
 
-- `backend/server.js`  
-  Main API server bootstrap:
-  - loads `.env` from project root
-  - creates Express app
-  - configures JSON + CORS middleware
-  - creates MySQL pool
-  - wires query layer, services, and routes
-  - exposes health endpoint (`/api/health`)
-  - starts listening on `PORT` (default `3000`)
+### 4.2 Routes
 
-This is the place to change server-wide middleware, app boot logic, and environment defaults.
-
----
-
-### 4.2 Routes Layer (`backend/routes/`)
-
-Routes are intentionally thin; they delegate business logic to services.
-
-- `backend/routes/review.js`  
-  Review-focused endpoints:
+- `backend/routes/review.js`
   - `GET /api/review-data`
   - `GET /api/topic-ratios`
-  Handles request/response and error wrapping only.
+  - Thin route layer, delegates to `reviewService`.
 
-- `backend/routes/aba.js`  
-  ABA-focused endpoints:
+- `backend/routes/aba.js`
   - `GET /api/aba-graph`
   - `POST /api/pyarg/evaluate`
+  - `POST /api/pyarg/evaluate/jobs`
+  - `GET /api/pyarg/evaluate/jobs/:jobId`
   - `POST /api/llm/translate-extension`
-  Also maps backend errors to HTTP status/payloads.
+  - `POST /api/llm/translate-extension/jobs`
+  - `GET /api/llm/translate-extension/jobs/:jobId`
 
-If you add a new endpoint, define the route here, then put business logic in a service.
+### 4.3 Query Layer
 
----
+- `backend/db/queries.js`
+  - Centralized SQL access helpers.
+  - Resolves topic table + contrary table from topic key.
+  - Provides DB helpers used by services:
+    - head claim lookup by topic/sentiment
+    - top assumptions/propositions by claim
+    - contrary joins
+    - review rows and count aggregation
+    - topic ratio source queries
 
-### 4.3 Services Layer (`backend/services/`)
+### 4.4 Topic and Sentiment Normalization
 
-Services contain business logic and orchestration.
+- `backend/utils/normalizers.js`
+  - `TOPIC_TABLES` source of truth for supported topics:
+    - `check-in/check_in`
+    - `check-out/check_out`
+    - `staff`
+    - `price`
+  - Topic normalization helpers.
+  - Sentiment normalization helpers (`Positive/Negative/All`).
+  - Atom-type classifier by naming convention (`no_evident_*`, `have_evident_*`).
 
-- `backend/services/reviewService.js`  
-  Builds response models for review pages:
-  - resolves topic/sentiment
-  - fetches main rows and contraries
-  - computes/sorts ratio data
-  - shapes payload for frontend consumption
+### 4.5 Review Service
 
-- `backend/services/abaGraphService.js`  
-  Core engine for ABA page logic:
-  - builds ABA graph data from DB
-  - selects relevant claim/support/attack structures
-  - prepares payload for Python semantics
-  - executes Python semantics runner (`pyarg_runner.py`)
-  - runs LLM translation/summarization routing:
-    - Ollama
-    - OpenAI
-    - Gemini
-  - returns unified payload used by `pyarg.html`
+- `backend/services/reviewService.js`
+  - Builds payload for review category page.
+  - For selected topic + sentiment:
+    - resolves head claim
+    - fetches main rows (`proposition`, `assumption`, `cnt`)
+    - computes contrary proposition list ranked by opposite-claim counts
+  - Computes topic ratio payload (`posTotal/negTotal` and percentages).
 
-If graph behavior, semantics output, or LLM summary format changes, this is usually the file to edit.
+### 4.6 ABA Graph + Semantics + LLM Service
 
----
+- `backend/services/abaGraphService.js`
+  - Most complex module in backend.
 
-### 4.4 Query Layer (`backend/db/`)
+Core responsibilities:
+- Parse and validate `/api/aba-graph` query parameters.
+- Build canonical framework from DB data.
+- Construct graph nodes/edges/clusters/display rows.
+- Construct PyArg payload (`language`, `assumptions`, `contraries`, `rules`).
+- Build level-based framework layers (`layer1` or `layer2`).
+- Execute PyArg evaluation (sync and async).
+- Execute Ollama explanation generation (sync and async).
+- Manage Redis-backed async job lifecycle.
 
-- `backend/db/queries.js`  
-  Centralized SQL access layer.
-  Encapsulates table lookups and query functions used by both services.
+Important behavior details:
+- `layer_mode=layer1` -> max level 4.
+- `layer_mode=layer2` -> max level 7.
+- Async jobs require Redis env (`REDIS_URL` or `REDIS_TLS_URL`).
+- LLM provider currently accepts only `ollama`.
+- LLM model is allowlisted (`gemma3:4b`, `deepseek-r1:7b`, `qwen2.5:7b`).
 
-Purpose:
-1. keep SQL out of route handlers,
-2. avoid duplicate query strings,
-3. make data logic easier to test/refactor.
+### 4.7 Python Runner
 
----
+- `backend/scripts/pyarg_runner.py`
+  - Reads JSON payload from stdin.
+  - Validates payload consistency.
+  - Creates ABAF object via `py_arg`.
+  - Computes extensions for requested semantics.
+  - Computes accepted assumptions (Credulous/Skeptical).
+  - Returns JSON on stdout.
 
-### 4.5 Utility Layer (`backend/utils/`)
+Supported semantics in current script:
+- Stable
+- Preferred
+- Conflict-Free
+- Naive
+- Admissible
+- Complete
+- SemiStable
+- Grounded
 
-- `backend/utils/normalizers.js`  
-  Shared normalization and mapping utilities:
-  - topic normalization
-  - sentiment normalization (`Positive/Negative/All`)
-  - head claim extraction helper
-  - atom type classification helper
+## 5) Frontend (`frontend/`)
 
-This file also controls which topics are currently mapped to active backend tables.
+### 5.1 Pages
 
----
+- `frontend/homepage.html`
+  - Landing page.
 
-### 4.6 Python Bridge (`backend/scripts/`)
+- `frontend/review_category.html`
+  - Topic cards + sentiment row panels + search.
 
-- `backend/scripts/pyarg_runner.py`  
-  Standalone Python executable that:
-  - reads JSON from stdin
-  - validates payload (`language`, `assumptions`, `contraries`, `rules`, semantics/strategy)
-  - constructs ABA framework via `py_arg`
-  - computes extensions for selected semantics
-  - computes accepted assumptions (`Credulous`/`Skeptical`)
-  - returns JSON to stdout
+- `frontend/pyarg.html`
+  - Main ABA graph workspace.
+  - Layer controls, semantics/strategy controls, graph panel, explanation cards.
 
-Node calls this script through `child_process.spawn`.
+- `frontend/aboutus.html`
+  - About/team page.
 
-Use this file for semantics-level algorithm behavior changes.
+### 5.2 Shared API Client
 
----
+- `frontend/assets/js/api.js`
+  - Builds candidate API base URLs.
+  - Supports `api_base` query parameter override.
+  - Retries across candidate bases.
+  - Supports per-request timeout via `apiFetch` options.
 
-## 5) Frontend Folder (`frontend/`)
+### 5.3 Page Logic Scripts
 
-The frontend is static (no React/Vite/Webpack).  
-Each page loads direct JS/CSS files from `frontend/assets/`.
+- `frontend/assets/js/homepage.js`
+  - Homepage interactions (slider and related UI).
 
-### 5.1 HTML Pages
+- `frontend/assets/js/review_category.js`
+  - Enables/disables topic cards.
+  - Loads `/api/topic-ratios`.
+  - Loads positive/negative rows via `/api/review-data`.
+  - Renders row contraries and `Show` button.
+  - Navigates to `pyarg.html` with query params.
 
-- `frontend/homepage.html`  
-  Landing page with hotel info and image slider.
+- `frontend/assets/js/pyarg-page.js`
+  - Main graph-page controller.
+  - Reads URL parameters (`topic`, `supporting`, `layer_mode`, etc.).
+  - Loads graph from `/api/aba-graph`.
+  - Renders SVG graph (with count badges and level rows).
+  - Requests semantics evaluation (prefers async job endpoint).
+  - Requests LLM explanation and graph summary (prefers async job endpoint).
+  - Polls job endpoints with timeout and progress handling.
 
-- `frontend/review_category.html`  
-  Topic browser page:
-  - shows category cards
-  - loads supporting/contrary rows
-  - includes search/filter UI
-  - has `Show` buttons that navigate to `pyarg.html` with query params
+- `frontend/assets/js/graph.js`
+  - Graph utility helpers (shared rendering helpers used by graph page script).
 
-- `frontend/pyarg.html`  
-  Main ABA visualization page:
-  - graph canvas
-  - semantics/strategy controls
-  - explanation panels
-  - guide/legend UI
-  - optional LLM summary area
+### 5.4 Styles
 
-- `frontend/aboutus.html`  
-  Team/about page.
+- `frontend/assets/css/homepage.css`
+- `frontend/assets/css/review_category.css`
+- `frontend/assets/css/pyarg.css`
+- `frontend/assets/css/aboutus.css`
 
----
+## 6) API-to-UI Flow
 
-### 5.2 Frontend JavaScript (`frontend/assets/js/`)
+### Flow A: Review category
 
-- `api.js`  
-  Shared API client helper:
-  - resolves API base URL (`api_base` query param support)
-  - fallback strategy across candidate bases
-  - exposes `apiFetch` to page scripts
-
-- `homepage.js`  
-  Slider behavior for landing page:
-  - next/prev controls
-  - dots navigation
-  - autoplay
-  - basic touch gestures
-
-- `review_category.js`  
-  Main logic for category page:
-  - enables/disables topic cards
-  - fetches topic ratios and review data
-  - renders rows + contraries
-  - supports search/filter
-  - builds URL to `pyarg.html`
-
-- `graph.js`  
-  Shared graph rendering utilities (text sizing/wrapping and common SVG helpers).
-
-- `semantics.js`  
-  Shared semantics helpers:
-  - normalize extensions
-  - compute accepted assumptions
-  - render token lists
-  - build preferred payload/count lookup helpers
-
-- `pyarg-page.js`  
-  Largest frontend logic module:
-  - reads URL query params
-  - loads graph payload from backend
-  - builds/updates interactive SVG graph
-  - supports node/edge interactions
-  - invokes semantics evaluation endpoint
-  - invokes LLM translation/summary endpoint
-  - updates UI cards and explanation panels
-
-When behavior in `pyarg.html` changes, edits are usually in this file.
-
----
-
-### 5.3 Frontend CSS (`frontend/assets/css/`)
-
-- `homepage.css`  
-  Styles for homepage layout, slider, and stats section.
-
-- `review_category.css`  
-  Styles for review category page and its table/tag UI.
-
-- `pyarg.css`  
-  Styles for ABA graph page, controls, cards, legends, and responsive behavior.
-
-- `aboutus.css`  
-  Styles for about/team page.
-
----
-
-### 5.4 Images (`frontend/assets/images/`)
-
-Contains page assets (hotel photos, team photos, background textures).
-
----
-
-## 6) Data and Request Flow (Practical)
-
-### Flow A: Review list page
-
-1. User opens `review_category.html?type=positive` (or negative).
-2. `review_category.js` calls:
-   - `GET /api/topic-ratios`
-   - `GET /api/review-data?...`
-3. User clicks `Show` on a row.
-4. Browser navigates to `pyarg.html` with `topic/sentiment/supporting` in query string.
+1. User selects topic card.
+2. `review_category.js` requests:
+   - `/api/topic-ratios`
+   - `/api/review-data` for positive/negative
+3. User clicks `Show` on a proposition.
+4. Browser opens `pyarg.html` with selected query params.
 
 ### Flow B: ABA graph page
 
 1. `pyarg-page.js` reads query params.
-2. Calls `GET /api/aba-graph` to get graph and metadata.
-3. Renders graph in SVG and UI panels.
-4. Calls `POST /api/pyarg/evaluate` for selected semantics/strategy.
-5. Optional: calls `POST /api/llm/translate-extension` for natural-language explanation and summary.
+2. Calls `/api/aba-graph`.
+3. Draws graph nodes/edges based on response.
+4. Sends generated framework payload to `/api/pyarg/evaluate/jobs` (or sync fallback path).
+5. Polls job status and renders semantics outputs.
+6. Sends explanation request to `/api/llm/translate-extension/jobs`.
+7. Polls and renders natural-language explanations.
 
----
+## 7) Where to Edit for Common Changes
 
+- Add or remove supported topics:
+  - `backend/utils/normalizers.js` (`TOPIC_TABLES`)
+  - ensure DB tables exist
 
+- Change review row shaping/ranking:
+  - `backend/services/reviewService.js`
 
+- Change ABA graph layering, attacks, or framework generation:
+  - `backend/services/abaGraphService.js`
 
+- Change semantics algorithm behavior:
+  - `backend/scripts/pyarg_runner.py`
 
+- Change endpoint contracts:
+  - route file (`backend/routes/*.js`) + corresponding service
+
+- Change graph page behavior/UI:
+  - `frontend/assets/js/pyarg-page.js`
+  - `frontend/assets/css/pyarg.css`
+  - `frontend/pyarg.html`
+
+## 8) Operational Notes
+
+- No automated test suite is configured currently (`npm test` is placeholder).
+- Async endpoints depend on Redis configuration.
+- LLM path currently depends on Ollama endpoint availability.
